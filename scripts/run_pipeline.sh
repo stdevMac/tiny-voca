@@ -23,7 +23,8 @@ SKIP=" $* "
 
 mkdir -p logs "$DATA"
 # cuDNN for CTranslate2, when host_setup.sh managed to install it.
-[ -f .venv/nvidia.env ] && . .venv/nvidia.env
+# Sourced with `set +u`: the file appends to LD_LIBRARY_PATH, which may be unset.
+if [ -f .venv/nvidia.env ]; then set +u; . .venv/nvidia.env; set -u; fi
 
 echo "mode=$MODE data=$DATA workers=$WORKERS asr=$ASR_DEVICE deadline=${DEADLINE_HOURS}h"
 "$PY" - "$DATA" "$DEADLINE_HOURS" <<'PY'

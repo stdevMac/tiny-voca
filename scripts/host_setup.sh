@@ -46,7 +46,7 @@ uv pip install --python .venv/bin/python -U qwen-tts faster-whisper
 uv pip install --python .venv/bin/python nvidia-cudnn-cu12==9.* nvidia-cublas-cu12 >/dev/null 2>&1 || true
 LIBS=$(ls -d "$PWD"/.venv/lib/python*/site-packages/nvidia/*/lib 2>/dev/null | tr '\n' ':' || true)
 if [ -n "$LIBS" ]; then
-  printf 'export LD_LIBRARY_PATH=%s$LD_LIBRARY_PATH\n' "$LIBS" > .venv/nvidia.env
+  printf 'export LD_LIBRARY_PATH=%s${LD_LIBRARY_PATH:-}\n' "$LIBS" > .venv/nvidia.env
 fi
 
 mkdir -p data logs

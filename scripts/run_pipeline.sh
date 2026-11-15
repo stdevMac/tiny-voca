@@ -91,6 +91,13 @@ stage evaluate    "$PY" -m tiny_voca.evaluate --checkpoint "$DATA/runs/$RUN/infe
                     --annotations "$ANN" --output "$DATA/eval/$RUN" --tag "$RUN" --device cuda
 stage export      "$PY" -m tiny_voca.export --checkpoint "$DATA/runs/$RUN/inference.pt" \
                     --output "$DATA/runs/$RUN/tiny-voca-es.onnx"
+if [[ -n "${MISTRAL_API_KEY:-}" ]]; then
+  stage listen    "$PY" scripts/validate_voice.py --root "$DATA/eval/$RUN/audio" \
+                    --report "$DATA/eval/$RUN/report.json" --references "$DATA/voices-es/references" \
+                    --limit 8 --output "$DATA/eval/$RUN/voice.json"
+else
+  echo "-- listen skipped (no MISTRAL_API_KEY)"
+fi
 
 echo
 echo "done: $DATA/runs/$RUN/inference.pt"

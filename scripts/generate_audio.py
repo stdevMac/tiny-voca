@@ -53,6 +53,7 @@ def main():
     parser.add_argument("--deadline-file", type=Path)
     parser.add_argument("--deadline-margin", type=float, default=600)
     parser.add_argument("--limit", type=int, help="Only N scripts, spread across the length distribution (smoke test)")
+    parser.add_argument("--batch", type=int, default=BATCH, help="Clips per teacher call; larger is faster if VRAM allows")
     parser.add_argument("--asr-device", default="cpu", choices=("cpu", "cuda"),
                         help="Where Whisper screens the clips. cuda is ~10x faster but runs synchronously")
     parser.add_argument("--seed", type=int, default=20261114)
@@ -168,16 +169,19 @@ def main():
         try:
             waves, rate = model.generate_voice_clone(text=[j["row"]["text"] for j in batch], language=[language.TTS_LANGUAGE] * len(batch),
                                                      voice_clone_prompt=[prompts[j["voice"]] for j in batch], max_new_tokens=600)
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            if len(batch) == 1:
-                fail(batch, attempt, "out of memory")
+        except Exception as error:
+            # Out of memory is recoverable by halving the batch; anything else is
+            # recorded for the retry pass so one bad batch cannot end the run.
+            out_of_memory = isinstance(error, torch.cuda.OutOfMemoryError) or "out of memory" in str(error).lower()
+            if out_of_memory and len(batch) > 1:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+                middle = len(batch) // 2
+                generate(batch[:middle], attempt, batch_id)
+                generate(batch[middle:], attempt, batch_id + 50000)
                 return
-            middle = len(batch) // 2
-            generate(batch[:middle], attempt, batch_id)
-            generate(batch[middle:], attempt, batch_id + 50000)
-            return
-        except Exception as error:      # one bad batch must not end a 2,250-batch run
             fail(batch, attempt, error)
             return
         seconds = round(time.time() - start, 3)
@@ -193,12 +197,14 @@ def main():
         existing = {uid: (status, n) for uid, status, n in db.execute("SELECT id, status, attempts FROM clips")}
         pending = [j for j in jobs if (attempt == 1 and j["id"] not in existing)
                    or (attempt == 2 and j["id"] in existing and existing[j["id"]][0] == "review" and existing[j["id"]][1] < 2)]
-        size = BATCH if attempt == 1 else 1
+        # Retries used to run one clip at a time; with a crash-safe batch handler
+        # they can use the same size, which matters when 5% of 18,000 clips retry.
+        size = args.batch
         for start in range(0, len(pending), size):
             if out_of_time():
                 stopped = True
                 break
-            generate(pending[start:start + size], attempt, start // BATCH if attempt == 1 else start + 20000)
+            generate(pending[start:start + size], attempt, start // args.batch if attempt == 1 else start + 20000)
             if (start // size) % 16 == 15:
                 report("generating")
         while futures:

@@ -131,7 +131,9 @@ def compare(reference, generated):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", type=Path, required=True, help="Directory the manifest's audio paths are relative to")
-    parser.add_argument("--manifest", type=Path, required=True, help="JSONL with 'audio', 'text' and optionally 'voice_id'")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--manifest", type=Path, help="JSONL with 'audio', 'text' and optionally 'voice_id'")
+    source.add_argument("--report", type=Path, help="report.json from tiny_voca.evaluate")
     parser.add_argument("--references", type=Path, help="Directory with F2.wav / M2.wav")
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--provider", default="mistral", choices=sorted(ENDPOINTS))
@@ -139,7 +141,13 @@ def main():
     parser.add_argument("--no-judge", action="store_true", help="Transcribe only (cheaper)")
     args = parser.parse_args()
     credentials(args.provider)
-    rows = [json.loads(line) for line in args.manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if args.report:
+        # The eval report already pairs each generated clip with the text it read.
+        report = json.loads(args.report.read_text(encoding="utf-8"))
+        rows = [{"audio": sample["generated"], "text": sample["text"], "voice_id": sample["voice"]}
+                for sample in report["samples"] if sample.get("generated")]
+    else:
+        rows = [json.loads(line) for line in args.manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows = [row for row in rows if (args.root / row["audio"]).is_file()][:args.limit]
     if not rows:
         raise SystemExit("no audio found for the manifest")

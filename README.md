@@ -72,11 +72,18 @@ src/tiny_voca/
   numbers_es.py            Spanish number reading, for WER and corpus building
   model.py train.py ...    unchanged from upstream
 scripts/
+  run_pipeline.sh          pilot or full run, per-stage logs, budget, stop on failure
+  host_setup.sh            Ubuntu 24.04 provisioning (eSpeak 1.52 from source)
+  preflight.py             checks the host before it spends money
   build_text_es.py         Spanish sentence list from CC0 corpora + templates
   design_voices.py         Qwen3-TTS VoiceDesign -> the two reference clips
   generate_audio.py        teacher TTS -> audio + manifest (GPU)
   generate_audio_local.py  macOS `say` stand-in, for smoke tests only
   split_manifest.py        one JSONL per split, which prepare expects
+  check_annotations.py     go/no-go gate on the alignment probe
+  validate_voice.py        Voxtral listening test: WER, accent, distinción, naturalness
+  probe_phones.py          asks the aligner which phone inventory a clip matches
+  espeak_probe.py          behavioural fingerprint of the phonemizer
 voices/es-ES.json          the two voice descriptions
 docs/spanish.md            front-end design
 docs/training-es.md        the end-to-end runbook and budget

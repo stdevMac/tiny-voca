@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 .venv/
+app/.venv/
 .DS_Store
 data/
 runs/
@@ -9,7 +10,9 @@ runs/
 *.onnx
 *.wav
 *.flac
+weights/
 .env
+.linode
 ops/
 web/public/assets/
 web/.wrangler/

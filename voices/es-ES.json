@@ -1,0 +1,12 @@
+{
+  "F2": {
+    "instruct": "Mujer joven de Madrid, unos treinta años. Voz clara, cálida y cercana, de tono medio. Pronunciación castellana nítida, con la distinción entre la ese y la zeta. Habla a un ritmo natural y conversacional, con entonación viva pero sin exagerar. Sin ruido de fondo, estudio seco.",
+    "text": "Buenos días. Me llamo Lucía y trabajo en una pequeña librería del centro. Me gusta leer por la mañana, antes de que abran las tiendas, y pasear cuando el barrio todavía está en silencio.",
+    "seed": 20261115
+  },
+  "M2": {
+    "instruct": "Hombre adulto de Valladolid, unos cuarenta y cinco años. Voz grave y serena, de tono medio-bajo, con buena proyección y sin aspereza. Pronunciación castellana clara, con la distinción entre la ese y la zeta. Ritmo pausado y natural, como quien explica algo con calma. Sin ruido de fondo, estudio seco.",
+    "text": "Buenas tardes. Me llamo Andrés y llevo veinte años reparando relojes en el mismo taller. Cada mañana abro la persiana, enciendo la lámpara y escucho el ruido de las máquinas antes de empezar a trabajar.",
+    "seed": 20261116
+  }
+}

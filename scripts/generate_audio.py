@@ -2,9 +2,13 @@
 
 Same recipe as the first batch (release/worker.py in the dataset repository):
 Qwen3-TTS 1.7B Base cloning the two approved VoiceDesign references, batches of
-eight, Whisper small.en screening at 15% normalized WER, one retry, peak
-normalisation to 0.95. Differences: scripts come from a local JSONL, nothing is
-uploaded from here (no token on the machine), and it stops at a budget deadline.
+eight, Whisper screening at 15% normalized WER, one retry, peak normalisation to
+0.95. Differences: scripts come from a local JSONL, nothing is uploaded from
+here (no token on the machine), and it stops at a budget deadline.
+
+The language comes from the active profile (``TINY_VOCA_LANGUAGE``): the
+teacher's language name, the Whisper model and the text normaliser used for
+scoring all follow it.
 
 Resumable: every clip is recorded in a SQLite file; rerun the same command.
 Output: <root>/audio/<id>.flac and <root>/manifest.jsonl (accepted clips, in the
@@ -17,13 +21,27 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 import time
 import numpy as np
 import soundfile as sf
 import torch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from tiny_voca.languages import profile as language
+
 MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 BATCH = 8
+
+
+def normalizer():
+    """The form both sides of a WER comparison are reduced to."""
+    if language.CODE == "es":
+        from tiny_voca.numbers_es import normalize
+        return normalize
+    from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
+    return EnglishTextNormalizer({"cancelled": "canceled", "colour": "color", "favourite": "favorite", "centre": "center"})
 
 
 def main():
@@ -41,7 +59,6 @@ def main():
     from jiwer import wer
     from qwen_tts import Qwen3TTSModel
     from scipy.signal import resample_poly
-    from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
     audio = args.root / "audio"
     audio.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(args.root / "state.sqlite")
@@ -77,8 +94,8 @@ def main():
     model = Qwen3TTSModel.from_pretrained(MODEL, device_map="cuda:0", dtype=torch.bfloat16, attn_implementation="sdpa")
     prompts = {v: model.create_voice_clone_prompt(ref_audio=str(args.references / f"{v}.wav"), ref_text=references[v]["text"],
                                                   x_vector_only_mode=False)[0] for v in ("F2", "M2")}
-    asr = WhisperModel("small.en", device="cpu", compute_type="int8", cpu_threads=6)
-    normalize = EnglishTextNormalizer({"cancelled": "canceled", "colour": "color", "favourite": "favorite", "centre": "center"})
+    asr = WhisperModel(language.ASR_MODEL, device="cpu", compute_type="int8", cpu_threads=6)
+    normalize = normalizer()
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     futures = []
 
@@ -97,7 +114,8 @@ def main():
                 reasons.append("excessive_silence")
             transcript, error = "", 1.0
             if not reasons:
-                segments, _ = asr.transcribe(resample_poly(w.astype("float32"), 2, 3), language="en", beam_size=3, condition_on_previous_text=False)
+                segments, _ = asr.transcribe(resample_poly(w.astype("float32"), 2, 3), language=language.ASR_LANGUAGE,
+                                             beam_size=3, condition_on_previous_text=False)
                 transcript = " ".join(s.text.strip() for s in segments)
                 error = wer(normalize(row["text"]), normalize(transcript) or "<empty>")
                 if error > 0.15:
@@ -124,7 +142,7 @@ def main():
         torch.manual_seed(seed)
         start = time.time()
         try:
-            waves, rate = model.generate_voice_clone(text=[j["row"]["text"] for j in batch], language=["English"] * len(batch),
+            waves, rate = model.generate_voice_clone(text=[j["row"]["text"] for j in batch], language=[language.TTS_LANGUAGE] * len(batch),
                                                      voice_clone_prompt=[prompts[j["voice"]] for j in batch], max_new_tokens=600)
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()

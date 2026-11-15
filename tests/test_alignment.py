@@ -7,9 +7,19 @@ from tiny_voca.align import AlignmentSettings, assemble, ctc_viterbi, frame_ener
 from tiny_voca.annotate import boundary_offsets, gate, summarize_offsets
 from tiny_voca.data import continuous_pitch
 from tiny_voca.refine import banded_viterbi, frame_labels, symbol_class
+from tiny_voca.text import LANGUAGE
 
 SETTINGS = AlignmentSettings()
 HOP, RATE = 256, 24000
+SPANISH = LANGUAGE == "es"
+
+# A twelve-token utterance with six phones, a word boundary and a comma, in the
+# active inventory. Same shape for both languages so the assertions below hold.
+SYMBOLS = ("<bos>", "m", "a", "<sp>", "ð", "e", ",", "<sp>", "t", "u", ".", "<eos>") if SPANISH else \
+          ("<bos>", "h", "aɪ", "<sp>", "ð", "ɛɹ", ",", "<sp>", "t", "uː", ".", "<eos>")
+VOWEL = "a" if SPANISH else "aɪ"
+SHORT = ("<bos>", "a", "t", "<sp>", "e", "t", "<eos>") if SPANISH else ("<bos>", "æ", "t", "<sp>", "eɪ", "t", "<eos>")
+PROBE = ("<bos>", "s", "i", "t", "<eos>") if SPANISH else ("<bos>", "s", "iː", "t", "<eos>")
 
 
 def collapse(path, blank=0):
@@ -41,7 +51,7 @@ class AlignmentTests(unittest.TestCase):
             token_spans(np.zeros((2, 3), dtype=np.float32), [1, 1])     # a repeat needs a blank between
 
     def test_durations_follow_emission_onsets_and_cover_every_frame(self):
-        symbols = ("<bos>", "h", "aɪ", "<sp>", "ð", "ɛɹ", ",", "<sp>", "t", "uː", ".", "<eos>")
+        symbols = SYMBOLS
         # Emission frames (20 ms each) of the six phones; a long gap before "t" holds a pause.
         spans = [(10, 10), (15, 16), (30, 30), (34, 34), (70, 70), (75, 75)]
         frames = 190
@@ -59,13 +69,13 @@ class AlignmentTests(unittest.TestCase):
         self.assertEqual(durations[7], 0)
         self.assertEqual(durations[10], 0)                       # final punctuation: EOS owns trailing silence
         self.assertEqual(durations[11], 20)
-        # "aɪ" starts 19 ms before its first emission frame (15 * 20 ms) and lasts to the next onset.
+        # The vowel starts 19 ms before its first emission frame (15 * 20 ms) and lasts to the next onset.
         start = int(np.ceil((15 * 0.02 + SETTINGS.onset_offset_seconds) * RATE / HOP))
         self.assertEqual(int(durations[:2].sum()), start)
         self.assertEqual(int(durations[:3].sum()), int(np.ceil((30 * 0.02 + SETTINGS.onset_offset_seconds) * RATE / HOP)))
 
     def test_short_silences_stay_with_phones_and_bad_input_is_rejected(self):
-        symbols = ("<bos>", "æ", "t", "<sp>", "eɪ", "t", "<eos>")
+        symbols = SHORT
         spans = [(5, 5), (12, 12), (22, 22), (30, 30)]
         silent = np.zeros(80, dtype=bool)
         silent[28:32] = True                                     # a 4-frame stop closure is not a pause
@@ -98,11 +108,11 @@ class AlignmentTests(unittest.TestCase):
         limited = banded_viterbi(scores, coarse_starts, coarse_ends, band=1)
         self.assertEqual(limited.tolist(), [7, 7, 6])                                # moves by at most one frame
         self.assertEqual(int(limited.sum()), 20)
-        self.assertEqual(frame_labels(("<bos>", "t", "<sp>", "aɪ"), [2, 1, 0, 3]).tolist(),
-                         [symbol_class("<bos>")] * 2 + [symbol_class("t")] + [symbol_class("aɪ")] * 3)
+        self.assertEqual(frame_labels(("<bos>", "t", "<sp>", VOWEL), [2, 1, 0, 3]).tolist(),
+                         [symbol_class("<bos>")] * 2 + [symbol_class("t")] + [symbol_class(VOWEL)] * 3)
 
     def test_voicing_probe_measures_boundary_offsets(self):
-        symbols = ("<bos>", "s", "iː", "t", "<eos>")
+        symbols = PROBE
         durations = [2, 6, 10, 5, 2]
         voiced = np.zeros(25, dtype=bool)
         voiced[7:19] = True                      # vowel is voiced one frame early and ends one frame late

@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 
 from tiny_voca.config import Config
-from tiny_voca.text import SYMBOL_TO_ID, frontend_fingerprint
+from tiny_voca.text import LANGUAGE, SYMBOL_TO_ID, frontend_fingerprint
 
 
 def small_config():
@@ -15,8 +15,19 @@ def small_config():
                   predictor_channels=16, cep_causal=12, cep_anti=4, noise_cep=8, max_frames=400)
 
 
-SYMBOLS = ("<bos>", "h", "ə", "l", "oʊ", "<sp>", "w", "ɜː", "l", "d", ".", "<eos>")
-STRESS = (0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0)
+# A short utterance in the active language's inventory: token, stress and the
+# number of frames each token lasts. Every phone symbol must exist in
+# ``tiny_voca.text.PHONE_SET`` for the tests that count phones.
+if LANGUAGE == "es":
+    # The word boundary sits at index 5 and the final full stop at 10: the
+    # fixtures below give those two zero frames, so every other slot must be a phone.
+    SYMBOLS = ("<bos>", "m", "a", "ð", "e", "<sp>", "t", "u", "n", "d", ".", "<eos>")
+    STRESS = (0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0)
+    VOWEL, VOICELESS_FRICATIVE, VOICELESS_STOP = "a", "s", "t"
+else:
+    SYMBOLS = ("<bos>", "h", "ə", "l", "oʊ", "<sp>", "w", "ɜː", "l", "d", ".", "<eos>")
+    STRESS = (0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0)
+    VOWEL, VOICELESS_FRICATIVE, VOICELESS_STOP = "ə", "s", "t"
 
 
 def sample(c, voice=0, durations=(3, 4, 5, 4, 9, 0, 4, 10, 5, 4, 0, 6)):

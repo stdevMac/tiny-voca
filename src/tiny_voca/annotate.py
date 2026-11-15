@@ -29,11 +29,10 @@ import torch
 from .align import ALIGNER_MODEL, AlignmentSettings, PhoneRecognizer, align_utterance
 from .config import ANNOTATION_VERSION, Config
 from .journal import append, atomic_json, file_hash, recover
-from .text import (PHONE_SET, SYMBOL_TO_ID, UNK, VOICELESS, VOWEL_SET, Phonemized, frontend_fingerprint,
+from .text import (FRICATIVES, PHONE_SET, SYMBOL_TO_ID, UNK, VOICELESS, VOWEL_SET, Phonemized, frontend_fingerprint,
                    frontend_identity, frontend_runtime, phonemize)
 
 SPLITS = ("train", "validation", "test")
-FRICATIVES = frozenset(("f", "θ", "s", "ʃ"))
 
 
 def load_acoustic_rows(features, split, config):

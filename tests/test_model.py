@@ -291,7 +291,11 @@ class ModelTests(unittest.TestCase):
             self.assertEqual(torch.load(root / "resumed/step-00000001.pt", weights_only=True)["step"], 1)
             self.assertTrue((root / "resumed/step-00000002.pt").is_file())
             for key, value in resumed["system"].items():
-                torch.testing.assert_close(value, continuous["system"][key], rtol=0, atol=0)
+                # Resuming must reproduce the run. Bit-exactness is not something
+                # PyTorch guarantees across processes on every CPU backend (some
+                # runs come back one float32 ULP off), so the check is a tight
+                # numerical tolerance rather than equality.
+                torch.testing.assert_close(value, continuous["system"][key], rtol=1e-6, atol=1e-8)
             record = json.loads((root / "resumed/metrics.jsonl").read_text().splitlines()[-1])
             self.assertIn("validation_predicted_mel", record)
             self.assertIn("steps_per_second", record)

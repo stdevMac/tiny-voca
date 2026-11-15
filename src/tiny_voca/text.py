@@ -1,27 +1,25 @@
-"""English front end: text -> phoneme tokens with a stress feature.
+"""Text front end: text -> phoneme tokens with a stress feature.
 
 The same code runs during annotation, training-set preparation and inference,
-so tokens can never drift between them. Two programs can produce the phonemes:
+so tokens can never drift between them. The phoneme inventory, the eSpeak
+voice, the fallback table and the text rules come from a language profile
+(``tiny_voca.languages``), selected once at import with ``TINY_VOCA_LANGUAGE``.
+This fork defaults to Spanish; ``en`` restores the original English front end
+byte for byte.
 
-* ``espeak`` (front-end version 3, the default): eSpeak NG, as described below.
-  The current checkpoints and annotations were made with it.
-* ``own`` (front-end version 4): the separate ``dizione`` package, a dictionary
-  built from CMUdict, a small model for unknown words and rules. No eSpeak, so
-  the whole system can be shipped under a permissive licence. Same 76 symbols.
-
-Choose with ``set_frontend("own")`` or ``TINY_VOCA_FRONTEND=own``. Everything
-below about tokens holds for both; the rest of this note is the eSpeak path.
-
-* eSpeak NG (``en-us``) is the only pronunciation source. It is an external
-  rule-based program: no neural G2P and no downloaded weights.
+* eSpeak NG is the pronunciation source. It is an external rule-based program:
+  no neural G2P and no downloaded weights.
 * A token is one eSpeak phoneme exactly as eSpeak segments it (``--sep``), for
-  example ``t``, ``aɪ``, ``ɑːɹ`` or ``n̩``. This is also the label inventory of
-  the phoneme recogniser used for offline forced alignment, so one aligned
-  label corresponds to exactly one token.
+  example ``t``, ``aɪ``, ``ɾ`` or ``ɲ``. This is also the label inventory of the
+  phoneme recogniser used for offline forced alignment, so one aligned label
+  corresponds to exactly one token.
 * Lexical stress is a parallel feature (0 none, 1 primary, 2 secondary), not a
   token, so it never has to be given audio frames.
 * Punctuation, word boundaries and the utterance edges are explicit tokens that
   may last zero frames. They carry pauses when the recording has them.
+* For Spanish, an accent profile may rewrite phones after eSpeak (sheísmo in
+  Rioplatense, /s/ aspiration in Cuban). The inventory is shared, so one
+  checkpoint can serve every accent.
 
 Versions 1 and 2 encoded IPA as UTF-8 bytes and piped text to eSpeak without a
 final newline; eSpeak NG 1.51 then drops the last character of the input, so
@@ -38,50 +36,51 @@ import shutil
 import subprocess
 import unicodedata
 
-FRONTEND_VERSION = 3
-ESPEAK_VOICE = "en-us"
+from . import languages
+
+FRONTEND_VERSION = languages.profile.FRONTEND_VERSION
+ESPEAK_VOICE = languages.espeak_voice()
 SEPARATOR = "_"
-FRONTENDS = ("espeak", "own")
+FRONTENDS = languages.profile.FRONTENDS
 FRONTEND_VARIABLE = "TINY_VOCA_FRONTEND"
+LANGUAGE = languages._code
+ACCENT = languages.accent().code if languages.accent() else None
 _frontend = os.environ.get(FRONTEND_VARIABLE, "espeak")
 if _frontend not in FRONTENDS:
     raise ValueError(f"{FRONTEND_VARIABLE} must be one of {FRONTENDS}, not {_frontend!r}")
 
-PAD, BOS, EOS, SP, UNK = "<pad>", "<bos>", "<eos>", "<sp>", "<unk>"
-SPECIALS = (PAD, BOS, EOS, SP, UNK)
-PUNCTUATION = (",", ".", "?", "!", ";", ":", '"', "'", "(", ")", "—", "…")
-CONSONANTS = ("p", "b", "t", "d", "k", "ɡ", "f", "v", "θ", "ð", "s", "z", "ʃ", "ʒ", "h",
-              "m", "n", "ŋ", "l", "ɹ", "j", "w", "tʃ", "dʒ", "ɾ", "ʔ")
-VOWELS = ("ə", "ɐ", "ɚ", "ᵻ", "ɪ", "i", "iː", "ɛ", "æ", "ʌ", "ɑː", "ɔ", "ɔː", "ʊ", "uː", "ɜː",
-          "eɪ", "aɪ", "ɔɪ", "oʊ", "aʊ", "iə", "oː",
-          "ɑːɹ", "ɔːɹ", "oːɹ", "ɪɹ", "ɛɹ", "ʊɹ", "aɪɚ", "aɪə", "əl", "n̩")
-PHONES = CONSONANTS + VOWELS
+SPECIALS = languages.profile.SPECIALS
+PAD, BOS, EOS, SP, UNK = SPECIALS
+PUNCTUATION = languages.profile.PUNCTUATION
+CONSONANTS = languages.profile.CONSONANTS
+VOWELS = languages.profile.VOWELS
+PHONES = languages.profile.PHONES
 # Append-only: changing the order or removing a symbol invalidates checkpoints.
-SYMBOLS = SPECIALS + PUNCTUATION + PHONES
+SYMBOLS = languages.profile.SYMBOLS
 SYMBOL_TO_ID = {symbol: index for index, symbol in enumerate(SYMBOLS)}
 PHONE_SET = frozenset(PHONES)
 PHONE_IDS = frozenset(SYMBOL_TO_ID[p] for p in PHONES) | {SYMBOL_TO_ID[UNK]}
-VOICELESS = frozenset(("p", "t", "k", "f", "θ", "s", "ʃ", "h", "tʃ", "ʔ"))
+VOICELESS = languages.profile.VOICELESS
+FRICATIVES = languages.profile.FRICATIVES
 VOWEL_SET = frozenset(VOWELS)
 STRESS_MARKS = {"ˈ": 1, "ˌ": 2}
 
 # eSpeak phonemes outside the inventory (foreign words, rare allophones) map to
 # the closest inventory phone(s). Anything else becomes <unk> and is reported.
-FALLBACK = {
-    "r": ("ɹ",), "ɻ": ("ɹ",), "ʁ": ("ɹ",), "x": ("k",), "ç": ("h",), "ɬ": ("l",), "ɫ": ("l",), "ɲ": ("n", "j"),
-    "ts": ("t", "s"), "dz": ("d", "z"), "β": ("v",), "ɣ": ("ɡ",), "ʎ": ("l", "j"),
-    "a": ("æ",), "aː": ("ɑː",), "ɑ": ("ɑː",), "ɒ": ("ɑː",), "ɑ̃": ("ɑː",), "ɔ̃": ("ɔː",), "ɛ̃": ("æ",),
-    "e": ("eɪ",), "eː": ("eɪ",), "o": ("oʊ",), "u": ("uː",), "y": ("uː",), "yː": ("uː",),
-    "ø": ("ɜː",), "øː": ("ɜː",), "œ": ("ɜː",), "ɜ": ("ɜː",), "ɛː": ("ɛ",), "ɪː": ("ɪ",),
-    "əʊ": ("oʊ",), "eə": ("ɛɹ",), "ɪə": ("iə",), "ʊə": ("ʊɹ",), "aʊɚ": ("aʊ", "ɚ"), "l̩": ("əl",), "m̩": ("ə", "m"),
-}
+FALLBACK = languages.profile.FALLBACK
+ABBREVIATIONS = languages.profile.ABBREVIATIONS
+NOT_AN_END = languages.profile.NOT_AN_END
+ONLY_LANGUAGE = languages.profile.ONLY_LANGUAGE
+SENTENCE_START = languages.profile.SENTENCE_START
+ASR_MODEL = languages.profile.ASR_MODEL
+ASR_LANGUAGE = languages.profile.ASR_LANGUAGE
 
 _QUOTES = str.maketrans({"‘": "'", "’": "'", "‚": "'", "‛": "'", "`": "'", "´": "'",
                          "“": '"', "”": '"', "„": '"', "‟": '"', "«": '"', "»": '"',
                          "–": "—", "―": "—", "[": "(", "{": "(", "]": ")", "}": ")"})
 _PUNCTUATION_CHARS = frozenset(PUNCTUATION)
-ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr", "vs", "etc"}
 _LANGUAGE_TAG = re.compile(r"\((?:_?[a-z0-9]_?){2,3}(?:-(?:_?[a-z0-9]_?)+)*\)")
+_WORD_BEFORE = re.compile(r"([^\W\d_]+)$")
 
 
 class NothingToPronounce(ValueError):
@@ -114,6 +113,8 @@ def set_frontend(name):
 
 
 def _dizione():
+    if LANGUAGE != "en":
+        raise RuntimeError('the "own" front end is English only; Spanish uses eSpeak')
     try:
         import dizione
     except ImportError as error:
@@ -127,8 +128,13 @@ def frontend_identity():
     if _frontend == "own":
         phonemizer = _dizione()
         return {"frontend_version": phonemizer.VERSION, "phonemizer": "dizione", "symbols": list(SYMBOLS)}
-    return {"frontend_version": FRONTEND_VERSION, "voice": ESPEAK_VOICE, "separator": SEPARATOR,
-            "symbols": list(SYMBOLS), "fallback": {key: list(value) for key, value in sorted(FALLBACK.items())}}
+    identity = {"frontend_version": FRONTEND_VERSION, "voice": ESPEAK_VOICE, "separator": SEPARATOR,
+                "symbols": list(SYMBOLS), "fallback": {key: list(value) for key, value in sorted(FALLBACK.items())}}
+    if LANGUAGE != "en":
+        # English keeps the exact identity it had before this module learned
+        # about languages, so released English checkpoints still load.
+        identity.update(language=LANGUAGE, accent=ACCENT)
+    return identity
 
 
 def frontend_runtime():
@@ -165,7 +171,7 @@ def chunks(text):
         if char in ".,:" and previous.isdigit() and following.isdigit():
             continue
         if char == ".":
-            word = re.search(r"([A-Za-z]+)$", text[:i])
+            word = _WORD_BEFORE.search(text[:i])
             if word and word[1].lower() in ABBREVIATIONS:
                 continue
             if previous.isalpha() and following.isalpha():
@@ -198,7 +204,7 @@ def espeak_words(piece):
     result = subprocess.run(
         [espeak_executable(), "-q", "--ipa", "--sep=" + SEPARATOR, "-v", ESPEAK_VOICE, "--stdin"],
         input=piece.rstrip("\n") + "\n", text=True, capture_output=True, check=True, timeout=30)
-    return parse_espeak(result.stdout)
+    return languages.apply_accent(parse_espeak(result.stdout))
 
 
 def parse_espeak(output):

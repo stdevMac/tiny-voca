@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import hashlib
 import json
 
@@ -10,6 +10,15 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def _vocabulary_size():
+    from .text import SYMBOLS
+    return len(SYMBOLS)
+
+
+def _default_speakers():
+    return ("F2", "M2")
+
+
 @dataclass(frozen=True)
 class Config:
     # Acoustic features (unchanged since feature schema 2; existing files are reused).
@@ -19,9 +28,11 @@ class Config:
     n_mels: int = 80
     f0_min: float = 50.0
     f0_max: float = 600.0
-    speakers: tuple[str, ...] = ("F2", "M2")
-    # Phoneme tokens from tiny_voca.text.SYMBOLS (front-end version 3).
-    vocab_size: int = 76
+    speakers: tuple[str, ...] = field(default_factory=_default_speakers)
+    # Phoneme tokens from tiny_voca.text.SYMBOLS: 76 for English, 61 for Spanish.
+    # The default follows the active language so a new model cannot be built
+    # against the wrong inventory.
+    vocab_size: int = field(default_factory=_vocabulary_size)
     # Text encoder and frame-level transformer.
     channels: int = 192
     heads: int = 4

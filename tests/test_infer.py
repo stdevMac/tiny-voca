@@ -21,11 +21,25 @@ import torch
 from tiny_voca import infer
 from tiny_voca.infer import PEAK, finished, limit_peak, sentences, shorter, speak, speak_text
 from tiny_voca.model import TinyVoca, UtteranceTooLong
-from tiny_voca.text import NothingToPronounce, tokenize
+from tiny_voca.text import LANGUAGE, NothingToPronounce, ONLY_LANGUAGE, tokenize
 from tiny_voca.train import export_model
-from helpers import small_config
+from helpers import VOWEL, small_config
+
+SPANISH = LANGUAGE == "es"
 
 BOM = chr(0xFEFF)                 # the mark some editors put at the start of a file; typed out it cannot be seen
+
+# Title abbreviations and initialisms differ per language, so these cases are not shared.
+ENGLISH_CASES = (
+    ("Dr. Smith paid $3.50 for version 2.0. Then he left.", ["Dr. Smith paid $3.50 for version 2.0.", "Then he left."]),
+    ("J. K. Lee wrote it, e.g. in May. Yes.", ["J. K. Lee wrote it, e.g. in May.", "Yes."]),
+    ("We met at 5 p.m. Then we left.", ["We met at 5 p.m. Then we left."]),    # "p.m." may not end a sentence
+)
+SPANISH_CASES = (
+    ("El Sr. García pagó 3,50 por la versión 2.0. Luego se fue.", ["El Sr. García pagó 3,50 por la versión 2.0.", "Luego se fue."]),
+    ("La Dra. Ruiz llegó a las 5. Nos fuimos.", ["La Dra. Ruiz llegó a las 5.", "Nos fuimos."]),
+    ("¿Vienes? ¡Claro que sí! Mañana.", ["¿Vienes?", "¡Claro que sí!", "Mañana."]),
+)
 
 
 def phonemize(text):
@@ -35,7 +49,7 @@ def phonemize(text):
         if mark:
             pieces.append((True, mark))
         elif word.lower() != "xd":
-            pieces.append((False, [[("t", 0), ("ɑː", 1), ("n", 0)]]))
+            pieces.append((False, [[("t", 0), (VOWEL, 1), ("n", 0)]]))
     return tokenize(pieces)
 
 
@@ -86,6 +100,7 @@ class SplittingTests(unittest.TestCase):
             self.assertEqual(finished(text), expected, text)
 
     @unittest.skipUnless(shutil.which("node"), "needs node to run the demo's own functions")
+    @unittest.skipIf(SPANISH, "the browser demo is still the English one")
     def test_the_demo_worker_splits_and_ends_text_like_the_package(self):
         worker = Path(__file__).resolve().parents[1] / "web" / "public" / "worker.js"
         harness = r"""
@@ -173,7 +188,7 @@ class LongTextTests(unittest.TestCase):
         wave, spoken = speak_text(network, text, "F2")
         self.assertEqual(len(spoken), 3)                     # the comma, then the long half in two
         self.assertTrue(all(len(phones) <= 40 for phones in spoken))
-        self.assertEqual(sum(phones.symbols.count("ɑː") for phones in spoken), 17)        # every word is said
+        self.assertEqual(sum(phones.symbols.count(VOWEL) for phones in spoken), 17)        # every word is said
         self.assertEqual(len(wave), sum(3 * len(phones) for phones in spoken) * network.config.hop)
 
     def test_a_sentence_with_too_many_frames_is_cut_too(self):
@@ -183,7 +198,7 @@ class LongTextTests(unittest.TestCase):
             speak(network, text, "F2")
         wave, spoken = speak_text(network, text, "F2")
         self.assertEqual(len(spoken), 4)
-        self.assertEqual(sum(phones.symbols.count("ɑː") for phones in spoken), 10)
+        self.assertEqual(sum(phones.symbols.count(VOWEL) for phones in spoken), 10)
         self.assertLessEqual(max(len(phones) for phones in spoken) * 20, network.config.max_frames)
         with self.assertRaisesRegex(ValueError, "speed"):    # other errors are not hidden by the splitting
             speak_text(network, text, "F2", speed=0)
@@ -197,7 +212,7 @@ class LongTextTests(unittest.TestCase):
         alone, _ = speak_text(network, "Good one. Then two more.", "F2")
         torch.testing.assert_close(wave, alone, rtol=0, atol=0)                # as if the skipped ones were not there
         for text in ("XD", "!!! ...", "", "こんにちは、世界。", "XD. こんにちは. XD"):
-            with self.assertRaisesRegex(NothingToPronounce, "nothing in the text could be read: tiny-voca only reads English"):
+            with self.assertRaisesRegex(NothingToPronounce, re.escape("nothing in the text could be read: " + ONLY_LANGUAGE)):
                 speak_text(network, text, "F2")
         with self.assertRaises(ValueError):                  # as before: one exception type for callers
             speak_text(network, "XD", "F2")
@@ -247,7 +262,7 @@ class LongTextTests(unittest.TestCase):
                     infer.main()
                 self.assertEqual(stopped.exception.code, 1)
                 self.assertEqual(said.getvalue(),
-                                 "tiny-voca only reads English for now. Nothing in the text could be read, so no file was written.\n")
+                                 ONLY_LANGUAGE + ". Nothing in the text could be read, so no file was written.\n")
                 self.assertFalse((root / "out.wav").exists())
 
 

@@ -1,12 +1,16 @@
 """The two front ends behind ``tiny_voca.text``: eSpeak (default) and dizione ("own").
 
-The dizione tests are skipped when the package or its built data is missing.
+dizione is an English front end, so these tests only run for
+``TINY_VOCA_LANGUAGE=en``. The dizione tests are skipped when the package or
+its built data is missing.
 """
 
 import unittest
 
 from tiny_voca import text
-from tiny_voca.text import SYMBOLS, SYMBOL_TO_ID
+from tiny_voca.text import LANGUAGE, SYMBOLS, SYMBOL_TO_ID
+
+ENGLISH = LANGUAGE == "en"
 
 # Fingerprint of the eSpeak front end (version 3): the tokens of every v3
 # annotation row and of the checkpoints trained on them.
@@ -20,6 +24,7 @@ except ImportError:
     dizione, HAVE_DIZIONE = None, False
 
 
+@unittest.skipUnless(ENGLISH, "dizione is an English front end")
 class FrontEndSwitchTests(unittest.TestCase):
     def tearDown(self):
         text.set_frontend("espeak")

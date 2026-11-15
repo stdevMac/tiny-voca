@@ -236,6 +236,18 @@ def check_leakage(train, validation):
         raise ValueError("train/validation leakage; split by sentence/text_id across BOTH voices. Examples: " + json.dumps(collisions, ensure_ascii=False))
 
 
+def available_memory():
+    """Bytes the kernel says are available, or ``None`` when it cannot say."""
+    try:
+        with open("/proc/meminfo", encoding="ascii") as stream:
+            for line in stream:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
+
+
 @torch.no_grad()
 def validate(system, dataset, indices, device, weights=WEIGHTS, batch_size=8):
     """Held-out metrics on a fixed balanced subset.
@@ -347,8 +359,18 @@ def main():
     pool = balanced_indices(train, args.subset) if args.subset else list(range(len(train)))
     validation_indices = balanced_indices(validation, args.validation_size)
     if not args.no_preload:
-        train.preload(pool)
-        validation.preload(validation_indices)
+        # Preloading is a big speed-up but it holds the whole corpus in RAM. On a
+        # 16 GB host with a 19-hour corpus that is an OOM kill hours into the run,
+        # so the estimate is checked first and lazy loading is used instead.
+        needed = train.footprint_bytes(pool) + validation.footprint_bytes(validation_indices)
+        available = available_memory()
+        if available is not None and needed > 0.6 * available:
+            print(json.dumps({"preload": "skipped", "needed_gb": round(needed / 2**30, 2),
+                              "available_gb": round(available / 2**30, 2),
+                              "reason": "corpus does not fit comfortably in RAM; reading lazily"}), flush=True)
+        else:
+            train.preload(pool)
+            validation.preload(validation_indices)
     system, critics = TrainingSystem(c).to(args.device), Discriminators().to(args.device)
     count = sum(p.numel() for p in system.model.parameters())
     if count > 5_000_000:

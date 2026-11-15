@@ -52,7 +52,9 @@ def main():
     parser.add_argument("--voices", type=Path, required=True, help="voices.json of the first batch")
     parser.add_argument("--deadline-file", type=Path)
     parser.add_argument("--deadline-margin", type=float, default=600)
-    parser.add_argument("--limit", type=int, help="Only the first N scripts (smoke test)")
+    parser.add_argument("--limit", type=int, help="Only N scripts, spread across the length distribution (smoke test)")
+    parser.add_argument("--asr-device", default="cpu", choices=("cpu", "cuda"),
+                        help="Where Whisper screens the clips. cuda is ~10x faster but runs synchronously")
     parser.add_argument("--seed", type=int, default=20261114)
     args = parser.parse_args()
     from faster_whisper import WhisperModel
@@ -65,7 +67,12 @@ def main():
     db.execute("CREATE TABLE IF NOT EXISTS clips(id TEXT PRIMARY KEY, status TEXT, attempts INTEGER, payload TEXT)")
     db.commit()
     rows = [json.loads(line) for line in args.scripts.read_text(encoding="utf-8").splitlines() if line.strip()]
-    rows = sorted(rows, key=lambda r: (r["character_count"], r["id"]))[:args.limit]
+    rows = sorted(rows, key=lambda r: (r["character_count"], r["id"]))
+    if args.limit and args.limit < len(rows):
+        # Spread the pilot over the length distribution instead of taking the head,
+        # so long sentences and the number templates are exercised too.
+        step = len(rows) / args.limit
+        rows = [rows[int(index * step)] for index in range(args.limit)]
     jobs = [{"id": f"{row['id']}_{voice}", "voice": voice, "row": row} for row in rows for voice in ("F2", "M2")]
     references = json.loads(args.voices.read_text())
     started = time.time()
@@ -94,9 +101,13 @@ def main():
     model = Qwen3TTSModel.from_pretrained(MODEL, device_map="cuda:0", dtype=torch.bfloat16, attn_implementation="sdpa")
     prompts = {v: model.create_voice_clone_prompt(ref_audio=str(args.references / f"{v}.wav"), ref_text=references[v]["text"],
                                                   x_vector_only_mode=False)[0] for v in ("F2", "M2")}
-    asr = WhisperModel(language.ASR_MODEL, device="cpu", compute_type="int8", cpu_threads=6)
+    asr = WhisperModel(language.ASR_MODEL, device=args.asr_device,
+                       compute_type="int8" if args.asr_device == "cpu" else "float16", cpu_threads=6)
     normalize = normalizer()
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    # On the CPU the transcription runs in a background thread so it overlaps the
+    # next GPU batch. On CUDA it runs in the main thread: two CUDA contexts in
+    # different threads would serialise anyway and only add failure modes.
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1) if args.asr_device == "cpu" else None
     futures = []
 
     def analyze(batch, waves, rate, attempt, seed, batch_id, seconds):
@@ -131,11 +142,22 @@ def main():
             records.append((job["id"], "review" if reasons else "accepted", attempt, json.dumps(payload)))
         return records
 
-    def collect(future):
-        records = future.result()
+    def store(records):
         db.executemany("INSERT INTO clips(id, status, attempts, payload) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                        "status=excluded.status, attempts=excluded.attempts, payload=excluded.payload", records)
         db.commit()
+
+    def collect(future):
+        store(future.result())
+
+    def fail(batch, attempt, error):
+        """A crashed batch must not kill the run: mark it for the retry pass."""
+        records = []
+        for job in batch:
+            payload = {"id": job["id"], "text_id": job["row"]["id"], "voice_id": job["voice"], "text": job["row"]["text"],
+                       "split": job["row"]["split"], "review_reasons": [f"generation_error: {type(error).__name__}: {error}"]}
+            records.append((job["id"], "review", attempt, json.dumps(payload)))
+        store(records)
 
     def generate(batch, attempt, batch_id):
         seed = args.seed + batch_id + attempt * 100000
@@ -147,14 +169,22 @@ def main():
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
             if len(batch) == 1:
-                raise
+                fail(batch, attempt, "out of memory")
+                return
             middle = len(batch) // 2
             generate(batch[:middle], attempt, batch_id)
             generate(batch[middle:], attempt, batch_id + 50000)
             return
-        futures.append(pool.submit(analyze, batch, waves, rate, attempt, seed, batch_id, round(time.time() - start, 3)))
-        if len(futures) >= 2:
-            collect(futures.pop(0))
+        except Exception as error:      # one bad batch must not end a 2,250-batch run
+            fail(batch, attempt, error)
+            return
+        seconds = round(time.time() - start, 3)
+        if pool is None:
+            store(analyze(batch, waves, rate, attempt, seed, batch_id, seconds))
+        else:
+            futures.append(pool.submit(analyze, batch, waves, rate, attempt, seed, batch_id, seconds))
+            if len(futures) >= 2:
+                collect(futures.pop(0))
 
     stopped = False
     for attempt in (1, 2):
@@ -173,7 +203,8 @@ def main():
             collect(futures.pop(0))
         if stopped:
             break
-    pool.shutdown(wait=True)
+    if pool is not None:
+        pool.shutdown(wait=True)
     accepted = [json.loads(p) for (p,) in db.execute("SELECT payload FROM clips WHERE status='accepted' ORDER BY id")]
     (args.root / "manifest.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in accepted), encoding="utf-8")
     (args.root / "review.jsonl").write_text("".join(p + "\n" for (p,) in db.execute("SELECT payload FROM clips WHERE status!='accepted' ORDER BY id")), encoding="utf-8")

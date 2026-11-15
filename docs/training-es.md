@@ -67,6 +67,20 @@ phonemes printed above the summary must be correct Spanish.
 
 ## Phase 1 — GPU host
 
+Once the host is up, one command runs everything:
+
+```bash
+./scripts/run_pipeline.sh pilot     # ~200 clips, gates on the alignment probe
+./scripts/run_pipeline.sh full      # 9,000 sentences, the real run
+```
+
+It writes `data/budget.json` from `DEADLINE_HOURS` (default 30), runs each stage
+with its own log under `logs/`, stops at the first failure, and refuses to train
+if `scripts/check_annotations.py` is unhappy. `--skip-audio` resumes from the
+audio stage. The manual commands below are what it runs, if you want to drive
+them by hand.
+
+
 Any Ubuntu 24.04 machine with an NVIDIA card and the driver installed. On
 Linode: create an *RTX 4000 Ada x1 Small* Linode from the Ubuntu 24.04 image,
 then:
@@ -206,6 +220,8 @@ faster path.
 |---|---|
 | `unknown_phoneme` rejections | a word eSpeak cannot read; the corpus builder already filters these, so it means the scripts file changed |
 | `vowels_not_voiced` rejections | the teacher's voice is breathy or the pitch tracker failed; check the clip |
+| `preflight` fails on `cuda libraries` | cuDNN 9 is missing for CTranslate2; install `nvidia-cudnn-cu12` or run with `--asr-device cpu` |
+| `preflight` fails on `espeak` | the front end did not produce `θ` for "Zaragoza": the eSpeak build is wrong |
 | `weak_alignment` | teacher and front end disagree on pronunciation, usually accent (`θ` vs `s`) |
 | `checkpoint was trained with a different phoneme inventory` | `TINY_VOCA_LANGUAGE` or `TINY_VOCA_ACCENT` differs from the one used to train |
 | training loss flat at ~52 | the pilot's first steps; normal until the duration head learns |

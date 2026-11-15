@@ -230,6 +230,43 @@ class DataTests(unittest.TestCase):
             self.assertLess(float(stored["prosody"][voiced, 0].abs().median()), 0.1)   # 200 Hz -> log(F0/200) = 0
             self.assertEqual(len(load_acoustic_rows(output, "train", c)), 2)
 
+    def test_parallel_preparation_produces_the_serial_manifest(self):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import soundfile as sf
+        from tiny_voca.prepare import prepare_split
+        c = Config()
+        time = np.arange(12000) / 24000
+
+        def audio():
+            stream = io.BytesIO()
+            sf.write(stream, 0.1 * np.sin(2 * np.pi * 200 * time), 24000, format="WAV")
+            return {"bytes": stream.getvalue()}
+        rows = [{"id": f"clip{i}", "text": "Hola.", "voice_id": "F2", "audio": audio()} for i in range(4)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.parquet"
+            pq.write_table(pa.Table.from_pylist(rows), source)
+            manifests = {}
+            for workers in (1, 2):
+                output = root / f"features-{workers}"
+                output.mkdir()
+                args = SimpleNamespace(output=output, inputs=[source], split="train", text_column="text",
+                                       speaker_column="voice_id", resume=False, workers=workers)
+                prepare_split(args, c)
+                manifests[workers] = (output / "train.jsonl").read_text()
+                self.assertEqual(len(recover(output / "train.jsonl")), 4)
+            self.assertEqual(manifests[1], manifests[2])           # same rows, same order, same paths
+
+    def test_preload_footprint_tracks_the_frame_count(self):
+        c = small_config()
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = write_annotations(directory, c, "train")
+            data = AnnotatedDataset(manifest, c)
+            per_frame = c.hop * 4 + c.n_mels * 4 + 3 * 4 + 24
+            self.assertEqual(data.footprint_bytes(), sum(row["frames"] for row in data.rows) * per_frame)
+            self.assertEqual(data.footprint_bytes([0]), data.rows[0]["frames"] * per_frame)
+
 
 if __name__ == "__main__":
     unittest.main()

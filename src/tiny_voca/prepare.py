@@ -6,9 +6,15 @@ annotation layer (``tiny_voca.annotate``), so a front-end or aligner change
 never forces this expensive step to run again.
 
 No network access: use the HF CLI separately to obtain a pinned dataset snapshot.
+
+Pitch tracking with ``librosa.pyin`` costs about 1.3 s per clip, so the corpus
+is processed in a process pool (``--workers``). The journal is still written by
+the parent process, in input order, so a resumed run sees exactly the same
+sequence of records as a serial one.
 """
 
 import argparse
+import concurrent.futures
 import fcntl
 import hashlib
 import io
@@ -66,8 +72,69 @@ def extract(wave, config):
             "prosody": torch.from_numpy(prosody.astype(np.float32))}
 
 
+def _worker_init():
+    """One thread per worker: the pool already provides the parallelism, and
+    nested BLAS threads would oversubscribe the machine."""
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    torch.set_num_threads(1)
+
+
+def prepare_row(task):
+    """Validate one source row and write its feature file. Runs in a worker.
+
+    Returns ``{"record_key", "entry" | "error", "identifier"}``; never raises,
+    because a bad row must become a reject, not a dead pool.
+    """
+    record_key, source, row, config, text_column, speaker_column, feature_dir = task
+    identifier = None
+    try:
+        if not isinstance(row, dict):
+            raise ValueError("row must be an object")
+        if "_input_error" in row:
+            raise ValueError(row["_input_error"])
+        identifier = row.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            raise ValueError("row must have a stable nonempty string id")
+        text, speaker = row[text_column], row[speaker_column]
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text must be a nonempty string")
+        if speaker not in config.speakers:
+            raise ValueError(f"unknown speaker {speaker!r}; expected {config.speakers}")
+        provenance = json_safe({k:row[k] for k in ("text_id", "origin", "source_id", "source_license", "source_url",
+                                                   "teacher_model", "reference_audio") if k in row})
+        audio = row["audio"]
+        if isinstance(audio, dict):
+            audio = io.BytesIO(audio["bytes"]) if audio.get("bytes") is not None else source.parent / audio["path"]
+        else:
+            audio = source.parent / audio
+        wave, sr = sf.read(audio, dtype="float32")
+        if sr != config.sample_rate:
+            raise ValueError(f"expected {config.sample_rate} Hz; got {sr}. Resample explicitly before preparation")
+        frames = math.ceil(len(wave)/config.hop)
+        if not MIN_FRAMES <= frames <= config.max_frames:
+            raise ValueError("audio duration outside admission limits")
+        name = hashlib.sha256(identifier.encode()).hexdigest()+".pt"
+        entry = {"record_key":record_key, "id":identifier, "path":f"{feature_dir.name}/{name}",
+                 "acoustic":config.acoustic_fingerprint, "text_hash":hashlib.sha256(text.strip().encode()).hexdigest(),
+                 "text":text, "speaker":speaker, "source_file":str(source), "frames":frames, "provenance":provenance}
+        json.dumps(entry, ensure_ascii=False, allow_nan=False)  # Validate before expensive DSP.
+        sample = extract(wave, config)
+        sample.update(speaker=config.speakers.index(speaker))
+        temporary = feature_dir/(name+".tmp")
+        with temporary.open("wb") as stream:
+            torch.save(sample, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, feature_dir/name)
+        return {"record_key": record_key, "entry": entry, "identifier": identifier, "source": str(source)}
+    except Exception as error:
+        return {"record_key": record_key, "error": f"{type(error).__name__}: {error}", "identifier": str(identifier),
+                "source": str(source)}
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--inputs", nargs="+", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--text-column", default="text")
@@ -75,7 +142,10 @@ def main():
     parser.add_argument("--config", type=Path)
     parser.add_argument("--split", choices=("train", "validation", "test"), required=True)
     parser.add_argument("--resume", action="store_true", help="Skip durably accepted/rejected records from these same inputs")
+    parser.add_argument("--workers", type=int, default=1, help="Processes for the per-clip work (pitch tracking dominates)")
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("--workers must be positive")
     c = Config.from_dict(json.loads(args.config.read_text())) if args.config else Config()
     args.output.mkdir(parents=True, exist_ok=True)
     # Lock is held through completion or an exception. Different splits may run separately.
@@ -113,64 +183,46 @@ def prepare_split(args, c):
     for entry in entries:
         if not (args.output/entry["path"]).is_file():
             raise ValueError(f"committed feature file is missing: {entry['path']}")
+
+    # Collect the pending rows first: duplicates have to be caught across the
+    # whole input, not just against what a serial loop has seen so far.
+    tasks, duplicates = [], {}
+    for source_index, source in enumerate(args.inputs):
+        for index, row in enumerate(records(source)):
+            record_key = f"{source_index}:{index}"
+            if record_key in done:
+                continue
+            tasks.append((record_key, source, row, c, args.text_column, args.speaker_column, feature_dir))
+            identifier = row.get("id") if isinstance(row, dict) else None
+            if isinstance(identifier, str) and identifier:
+                duplicates.setdefault(identifier, []).append(record_key)
     accepted_count, rejected_count = len(entries), len(rejected)
+    workers = int(getattr(args, "workers", 1) or 1)
+    print(json.dumps({"pending": len(tasks), "workers": workers}), flush=True)
     with manifest.open("a", encoding="utf-8") as accepted_stream, rejects.open("a", encoding="utf-8") as rejected_stream:
-        for source_index, source in enumerate(args.inputs):
-            for index, row in enumerate(records(source)):
-                record_key = f"{source_index}:{index}"
-                if record_key in done:
-                    continue
-                identifier = None
-                try:
-                    if not isinstance(row, dict):
-                        raise ValueError("row must be an object")
-                    if "_input_error" in row:
-                        raise ValueError(row["_input_error"])
-                    identifier = row.get("id")
-                    if not isinstance(identifier, str) or not identifier:
-                        raise ValueError("row must have a stable nonempty string id")
-                    if identifier in seen:
-                        raise ValueError("duplicate id")
-                    if row.get("split", args.split) != args.split:
-                        raise ValueError("row split differs from --split")
-                    text, speaker = row[args.text_column], row[args.speaker_column]
-                    if not isinstance(text, str) or not text.strip():
-                        raise ValueError("text must be a nonempty string")
-                    if speaker not in c.speakers:
-                        raise ValueError(f"unknown speaker {speaker!r}; expected {c.speakers}")
-                    provenance = json_safe({k:row[k] for k in ("text_id", "origin", "source_id", "source_license", "source_url", "teacher_model", "reference_audio") if k in row})
-                    audio = row["audio"]
-                    if isinstance(audio, dict):
-                        audio = io.BytesIO(audio["bytes"]) if audio.get("bytes") is not None else source.parent / audio["path"]
-                    else:
-                        audio = source.parent / audio
-                    wave, sr = sf.read(audio, dtype="float32")
-                    if sr != c.sample_rate:
-                        raise ValueError(f"expected {c.sample_rate} Hz; got {sr}. Resample explicitly before preparation")
-                    frames = math.ceil(len(wave)/c.hop)
-                    if not MIN_FRAMES <= frames <= c.max_frames:
-                        raise ValueError("audio duration outside admission limits")
-                    name = hashlib.sha256(identifier.encode()).hexdigest()+".pt"
-                    entry = {"record_key":record_key, "id":identifier, "path":f"{args.split}/{name}", "acoustic":c.acoustic_fingerprint,
-                             "text_hash":hashlib.sha256(text.strip().encode()).hexdigest(), "text":text,
-                             "speaker":speaker, "source_file":str(source), "frames":frames, "provenance":provenance}
-                    json.dumps(entry, ensure_ascii=False, allow_nan=False)  # Validate before expensive DSP.
-                    sample = extract(wave, c)
-                    sample.update(speaker=c.speakers.index(speaker))
-                    temporary = feature_dir/(name+".tmp")
-                    with temporary.open("wb") as stream:
-                        torch.save(sample, stream)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(temporary, feature_dir/name)
-                except Exception as error:
-                    append(rejected_stream, {"record_key":record_key, "id":str(identifier), "source":str(source), "reason":f"{type(error).__name__}: {error}"})
+        def consume(results):
+            nonlocal accepted_count, rejected_count
+            for result in results:
+                if "error" in result:
+                    append(rejected_stream, {"record_key": result["record_key"], "id": result["identifier"],
+                                             "source": result["source"], "reason": result["error"]})
                     rejected_count += 1
-                else:
-                    # Journal write failures must abort, not masquerade as bad source rows.
-                    append(accepted_stream, entry)
-                    seen.add(identifier)
-                    accepted_count += 1
+                    continue
+                identifier = result["identifier"]
+                if identifier in seen or len(duplicates.get(identifier, ())) > 1:
+                    append(rejected_stream, {"record_key": result["record_key"], "id": identifier,
+                                             "source": result["source"], "reason": "ValueError: duplicate id"})
+                    rejected_count += 1
+                    continue
+                # Journal write failures must abort, not masquerade as bad source rows.
+                append(accepted_stream, result["entry"])
+                seen.add(identifier)
+                accepted_count += 1
+        if workers == 1:
+            consume(map(prepare_row, tasks))
+        else:
+            with concurrent.futures.ProcessPoolExecutor(workers, initializer=_worker_init) as pool:
+                consume(pool.map(prepare_row, tasks, chunksize=4))
     atomic_json(metadata_path, {"identity":identity, "complete":True, "accepted":accepted_count, "rejected":rejected_count})
     print(json.dumps({"accepted":accepted_count, "rejected":rejected_count, "manifest":str(manifest)}))
     if not accepted_count:

@@ -86,10 +86,15 @@ build, so a difference would silently produce different phones at inference
 than at training.
 
 **Fix:** `scripts/espeak_probe.py` phonemizes a fixed 40-sentence set and prints
-a hash. The preflight prints it on the host and the pipeline records it next to
-the annotations. If the laptop hash differs, the model is still usable but the
-mismatch is known instead of guessed. If it turns out to matter, the fix is to
-build 1.52 on the host, not to change the model.
+a hash. Measured on a throwaway Ubuntu 24.04 box: 1.51 gives `89a0beaf…`, the
+macOS 1.52 build gives `53fca553…`, and **1 of 40 sentences differs** — 1.51
+writes "informe" as `i m f o ɾ m e` and 1.52 as `i n f o ɾ m e`. That is the
+`n → m` assimilation before a labiodental, so it affects a whole word class
+(`informe`, `confianza`, `enfermo`, `infinito`, …), not one word.
+
+Building 1.52.0 from the git tag on the host reproduces the macOS hash exactly,
+so `scripts/host_setup.sh` does that and the drift is gone rather than merely
+detected.
 
 ### H3. Nothing guarantees the machine gets deleted
 

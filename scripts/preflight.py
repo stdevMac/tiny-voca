@@ -38,6 +38,17 @@ def check(name, function, *arguments, **keywords):
     return detail
 
 
+def optional(name, function, *arguments, **keywords):
+    """A check whose failure only changes a setting, not the run's viability."""
+    try:
+        detail = function(*arguments, **keywords)
+    except Exception as error:
+        print(f"warn  {name}: {type(error).__name__}: {error} (falling back)")
+        return None
+    print(f"ok    {name}{': ' + str(detail) if detail else ''}")
+    return detail
+
+
 def environment(allow_cpu=False):
     import platform
     import torch
@@ -170,7 +181,7 @@ def main():
         check("espeak", espeak)
         check("packages", packages)
         if not args.allow_cpu:
-            check("cuda libraries", cudnn)
+            optional("cuda libraries", cudnn)
         check("configuration", configuration)
         check("onnx roundtrip", onnx_roundtrip)
         if not args.no_download:

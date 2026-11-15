@@ -43,7 +43,9 @@ def main():
     config = json.loads(args.config.read_text(encoding="utf-8"))
     references = args.root / "references"
     references.mkdir(parents=True, exist_ok=True)
-    model = Qwen3TTSModel.from_pretrained(MODEL, device_map=args.device, dtype=torch.bfloat16, attn_implementation="sdpa")
+    # bfloat16 is a CUDA win and a Metal liability; float32 works everywhere.
+    dtype = torch.bfloat16 if args.device.startswith("cuda") else torch.float32
+    model = Qwen3TTSModel.from_pretrained(MODEL, device_map=args.device, dtype=dtype, attn_implementation="sdpa")
     voices = {}
     for name, spec in config.items():
         best = None

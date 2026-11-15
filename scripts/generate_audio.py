@@ -98,7 +98,9 @@ def main():
         print(json.dumps(value), flush=True)
 
     torch.set_num_threads(6)
-    model = Qwen3TTSModel.from_pretrained(MODEL, device_map="cuda:0", dtype=torch.bfloat16, attn_implementation="sdpa")
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    model = Qwen3TTSModel.from_pretrained(MODEL, device_map="cuda:0" if torch.cuda.is_available() else "mps",
+                                          dtype=dtype, attn_implementation="sdpa")
     prompts = {v: model.create_voice_clone_prompt(ref_audio=str(args.references / f"{v}.wav"), ref_text=references[v]["text"],
                                                   x_vector_only_mode=False)[0] for v in ("F2", "M2")}
     asr = WhisperModel(language.ASR_MODEL, device=args.asr_device,

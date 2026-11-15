@@ -114,6 +114,21 @@ copies them, so a bad voice is 19 hours of bad audio. The descriptions in
 `voices/es-ES.json` ask for Castilian with distinción; if the clip has seseo,
 the `θ` tokens will never match the audio and the alignment will reject rows.
 
+There is a listening test that does not need your ears, using Mistral's Voxtral
+(an audio model that is not part of this pipeline):
+
+```bash
+export MISTRAL_API_KEY=...
+python scripts/validate_voice.py --root data/voices-es --manifest data/voices-es/manifest.jsonl \
+    --limit 2 --output data/voices-es/voice.json
+```
+
+It reports word error rate against the reference text, accent, whether
+distinción is present, naturalness and artefacts. On the two designed voices it
+returned WER 0.0, accent `castilian`, `distincion: true`, naturalness 8/10. Rerun
+it on the trained model's output at the end — it is the same command with a
+different `--root`/`--manifest`.
+
 ## Phase 3 — teacher audio
 
 ```bash

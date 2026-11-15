@@ -22,6 +22,8 @@ RUN=${RUN:-es-1}
 SKIP=" $* "
 
 mkdir -p logs "$DATA"
+# cuDNN for CTranslate2, when host_setup.sh managed to install it.
+[ -f .venv/nvidia.env ] && . .venv/nvidia.env
 
 echo "mode=$MODE data=$DATA workers=$WORKERS asr=$ASR_DEVICE deadline=${DEADLINE_HOURS}h"
 "$PY" - "$DATA" "$DEADLINE_HOURS" <<'PY'

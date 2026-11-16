@@ -77,9 +77,10 @@ NOVEL_SENTENCES = (
     "Aquella mañana, el cielo estaba tan limpio que se veían las montañas.",
     "Los niños corrían por la playa mientras sus padres preparaban la cena.",
     # A yes/no question, because Spanish marks it with intonation alone and the
-    # rest of this list would never test that. The exclamation covers the other
-    # tune the model has to produce and word error rate cannot see.
-    "¿Te apetece que vayamos a dar un paseo por la playa esta tarde?",
+    # rest of this list would never test that. Deliberately formal and unlike
+    # anything in the corpus: the corpus's questions are conversational, so a
+    # chatty sentence here would only measure how well a template was copied.
+    "¿Cree que el comité aprobará la propuesta antes del verano?",
     "¡Menuda sorpresa nos dio tu hermano con aquella noticia!",
 )
 

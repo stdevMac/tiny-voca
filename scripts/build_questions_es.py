@@ -55,6 +55,25 @@ Requisitos:
 
 Devuelve solo las preguntas, una por línea."""
 
+PROMPT_EXCLAMATION = """Escribe {count} exclamaciones en español de España, natural y conversacional, como las que una persona diría en voz alta.
+
+Requisitos:
+- Cada exclamación en su propia línea, sin numerar, sin comentarios.
+- Entre 6 y 20 palabras.
+- Empieza con el signo de apertura ¡ y termina con !
+- Sin cifras: escribe los números con letras.
+- Sin abreviaturas, sin siglas, sin comillas, sin paréntesis, sin guiones.
+- Nada de nombres de famosos ni de marcas.
+- Varía mucho el tipo: alegría, sorpresa, enfado, alivio, cansancio, entusiasmo, decepción, miedo, gratitud, admiración.
+- Que suenen a habla real, no a titular de periódico.
+- Español de España: nada de ustedes, nada de acá, nada de carro ni computadora.
+- No repitas la misma exclamación con otra palabra.
+
+Devuelve solo las exclamaciones, una por línea."""
+
+
+MARK = "?"
+
 
 def usable(line):
     line = re.sub(r"\s+", " ", line.strip().replace("’", "'").replace("«", '"').replace("»", '"'))
@@ -62,7 +81,7 @@ def usable(line):
         return None
     if BAD.search(line):
         return None
-    if not line.endswith("?"):
+    if not line.endswith(MARK):
         return None
     return line
 
@@ -80,9 +99,9 @@ def signature(text):
     return " ".join(words[:2] + words[-2:])
 
 
-def ask(key, count, model, temperature, attempts=4):
+def ask(key, count, model, temperature, prompt, attempts=4):
     body = json.dumps({"model": model, "temperature": temperature,
-                       "messages": [{"role": "user", "content": PROMPT.format(count=count)}]}).encode()
+                       "messages": [{"role": "user", "content": prompt.format(count=count)}]}).encode()
     last = None
     for attempt in range(attempts):
         try:
@@ -106,11 +125,15 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--count", type=int, default=1600, help="Questions to keep after filtering")
     parser.add_argument("--existing", type=Path, help="Corpus JSONL whose texts must not be repeated")
+    parser.add_argument("--kind", default="question", choices=("question", "exclamation"))
     parser.add_argument("--model", default="mistral-large-latest")
     parser.add_argument("--per-call", type=int, default=100)
     parser.add_argument("--rounds", type=int, default=40, help="Give up after this many calls")
     parser.add_argument("--temperature", type=float, default=0.9)
     args = parser.parse_args()
+    global MARK
+    MARK = "?" if args.kind == "question" else "!"
+    prompt = PROMPT if args.kind == "question" else PROMPT_EXCLAMATION
     key = os.environ.get("MISTRAL_API_KEY")
     if not key:
         raise SystemExit("set MISTRAL_API_KEY")
@@ -136,7 +159,7 @@ def main():
     for round_number in range(args.rounds):
         if kept >= args.count:
             break
-        for raw in ask(key, args.per_call, args.model, args.temperature):
+        for raw in ask(key, args.per_call, args.model, args.temperature, prompt):
             text = usable(raw)
             if text is None:
                 rejected["filter"] += 1
@@ -161,10 +184,10 @@ def main():
             seen.add(text.lower())
             shapes[shape] += 1
             identifier = hashlib.sha256(text.encode()).hexdigest()[:16]
-            rows.append({"id": identifier, "text": text, "original_text": text, "category": "question",
-                         "origin": "mistral_questions", "source_id": identifier,
+            rows.append({"id": identifier, "text": text, "original_text": text, "category": args.kind,
+                         "origin": f"mistral_{args.kind}s", "source_id": identifier,
                          "source_url": "https://github.com/n4ze3m/tiny-voca",
-                         "source_license": "project-own", "group_id": "mistral_questions:" + identifier,
+                         "source_license": "project-own", "group_id": f"mistral_{args.kind}s:" + identifier,
                          "split": "train", "llm_model": args.model, "llm_modified": False,
                          "word_count": len(text.split()), "character_count": len(text), "audio_status": "not_generated"})
             kept += 1

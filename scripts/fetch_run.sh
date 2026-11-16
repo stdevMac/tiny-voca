@@ -66,6 +66,10 @@ copy() {
 
 echo "== model and run"
 copy "data/runs/$RUN/inference.pt" "runs/$RUN/inference.pt"
+# The full training checkpoint: optimizer state, discriminators and the mel
+# head. Large, and the only thing that makes a later round able to branch from
+# this run instead of paying for the teacher again.
+copy "data/runs/$RUN/last.pt" "runs/$RUN/last.pt"
 # Numbered checkpoints are large and only useful for comparison; the best one is
 # already exported to inference.pt.
 "${SSH[@]}" "$HOST" "cd $REMOTE && ls data/runs/$RUN/tiny-voca-es.onnx 2>/dev/null" >/dev/null && \

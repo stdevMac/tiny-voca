@@ -80,8 +80,14 @@ NOVEL_SENTENCES = (
     # rest of this list would never test that. Deliberately formal and unlike
     # anything in the corpus: the corpus's questions are conversational, so a
     # chatty sentence here would only measure how well a template was copied.
+    # Three more of the same register, because one sample cannot tell a
+    # systematic accent drift from a single unlucky clip.
     "¿Cree que el comité aprobará la propuesta antes del verano?",
+    "¿Considera que la propuesta merece una segunda lectura?",
+    "¿Le parece que el informe está listo para presentarlo?",
+    "¿Piensa que la situación mejorará durante el próximo trimestre?",
     "¡Menuda sorpresa nos dio tu hermano con aquella noticia!",
+    "¡Vaya alegría llevarme esta noticia después de tantos meses de espera!",
 )
 
 

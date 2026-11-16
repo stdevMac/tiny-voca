@@ -130,6 +130,7 @@ def main():
                 break
             if taken[text[-1]] >= quota[text[-1]]:
                 continue
+            taken[text[-1]] += 1
             try:
                 phones = phonemize(text)
             except Exception:

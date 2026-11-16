@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--config", type=Path, required=True, help="JSON: {name: {instruct, text, seed}}")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--takes", type=int, default=3, help="Clips per voice; the loudest clean one is kept")
+    parser.add_argument("--force", action="store_true", help="Redesign even when the reference clips already exist")
     args = parser.parse_args()
     import numpy as np
     import soundfile as sf
@@ -43,6 +44,13 @@ def main():
     config = json.loads(args.config.read_text(encoding="utf-8"))
     references = args.root / "references"
     references.mkdir(parents=True, exist_ok=True)
+    # The voices are the one thing every clip is cloned from, and they were
+    # validated by ear and by Voxtral. Regenerating them silently would change
+    # the dataset under a checkpoint that was trained on the old ones.
+    existing = [name for name in config if (references / f"{name}.wav").is_file()]
+    if existing and not args.force:
+        print(json.dumps({"voices": existing, "action": "kept existing references (pass --force to redesign)"}))
+        return
     # bfloat16 is a CUDA win and a Metal liability; float32 works everywhere.
     dtype = torch.bfloat16 if args.device.startswith("cuda") else torch.float32
     model = Qwen3TTSModel.from_pretrained(MODEL, device_map=args.device, dtype=dtype, attn_implementation="sdpa")

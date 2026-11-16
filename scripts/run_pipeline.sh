@@ -19,6 +19,7 @@ WORKERS=${WORKERS:-$(nproc)}
 ASR_DEVICE=${ASR_DEVICE:-cuda}
 BATCH=${BATCH:-32}
 BATCH_CHARS=${BATCH_CHARS:-2500}
+ASR_BEAM=${ASR_BEAM:-3}
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 DEADLINE_HOURS=${DEADLINE_HOURS:-30}
 RUN=${RUN:-es-1}
@@ -30,7 +31,7 @@ mkdir -p logs "$DATA"
 # Sourced with `set +u`: the file appends to LD_LIBRARY_PATH, which may be unset.
 if [ -f .venv/nvidia.env ]; then set +u; . .venv/nvidia.env; set -u; fi
 
-echo "mode=$MODE data=$DATA workers=$WORKERS asr=$ASR_DEVICE batch=$BATCH/$BATCH_CHARS deadline=${DEADLINE_HOURS}h"
+echo "mode=$MODE data=$DATA workers=$WORKERS asr=$ASR_DEVICE batch=$BATCH/$BATCH_CHARS beam=$ASR_BEAM deadline=${DEADLINE_HOURS}h"
 "$PY" - "$DATA" "$DEADLINE_HOURS" <<'PY'
 import json, sys, time
 from pathlib import Path
@@ -70,7 +71,7 @@ stage scripts     "$PY" scripts/build_text_es.py \
 stage voices      "$PY" scripts/design_voices.py --root "$DATA/voices-es" --config voices/es-ES.json
 stage audio       "$PY" scripts/generate_audio.py --scripts "$DATA/scripts-$MODE.jsonl" --root "$AUDIO" \
                     --references "$DATA/voices-es/references" --voices "$DATA/voices-es/voices.json" \
-                    --asr-device "$ASR_DEVICE" --batch "$BATCH" --batch-chars "$BATCH_CHARS" --deadline-file "$DATA/budget.json" ${LIMIT:+--limit "$LIMIT"}
+                    --asr-device "$ASR_DEVICE" --asr-beam "$ASR_BEAM" --batch "$BATCH" --batch-chars "$BATCH_CHARS" --deadline-file "$DATA/budget.json" ${LIMIT:+--limit "$LIMIT"}
 stage split       "$PY" scripts/split_manifest.py --root "$AUDIO" --force
 # A stage that is interrupted must be restartable. prepare and annotate both
 # refuse to reuse a directory whose recorded inputs no longer match, which is

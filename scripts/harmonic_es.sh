@@ -35,17 +35,29 @@ TRAIN_SECONDS=${TRAIN_SECONDS:-14400}
 OUT="$DATA/runs/$RUN"
 
 if [[ "${1:-}" == "--compare" ]]; then
-  echo "== evaluating $BASE_RUN and $RUN with the same protocol"
-  for name in "$BASE_RUN" "$RUN"; do
-    checkpoint="$DATA/runs/$name/inference.pt"
-    [[ -f "$checkpoint" ]] || { echo "missing $checkpoint" >&2; exit 1; }
+  # Everything round 1 measured, on both checkpoints, so the fine-tune is judged
+  # on the same battery that shipped the anneal rather than on HNR alone. A
+  # periodicity win that costs word error rate or the question rise is not a win.
+  measure() {
+    local name="$1" checkpoint="$2" out="$DATA/eval/harmonic-$1"
+    mkdir -p "$out"
+    echo "== $name: $checkpoint"
     "$PY" -m tiny_voca.evaluate --checkpoint "$checkpoint" --annotations "$DATA/annotations-es" \
-      --output "$DATA/eval/harmonic-$name" --tag "$name" --device cuda --splits validation test \
+      --output "$out" --tag "$name" --device cuda --splits validation test \
       --per-voice 20 --asr-model large-v3-turbo
     "$PY" scripts/probe_periodicity.py --checkpoint "$checkpoint" --annotations "$DATA/annotations-es" \
-      --per-voice 12 --output "$DATA/eval/harmonic-$name/periodicity.json"
-  done
-  "$PY" - "$DATA/eval/harmonic-$BASE_RUN" "$DATA/eval/harmonic-$RUN" <<'PY'
+      --per-voice 12 --output "$out/periodicity.json"
+    "$PY" scripts/probe_punctuation.py --checkpoint "$checkpoint" --annotations "$DATA/annotations-es" \
+      --output "$out/punctuation" --per-voice 12 --device cuda
+    "$PY" scripts/probe_intonation.py --report "$out/report.json" --audio-dir "$out/audio" \
+      --output "$out/intonation.json" --limit 40
+    "$PY" scripts/probe_voices.py --report "$out/report.json" --audio-dir "$out/audio" \
+      --references "$DATA/voices-es/references" --output "$out/voices.json"
+    "$PY" scripts/demo_es.py --checkpoint "$checkpoint" --output "$out/demo" --device cuda
+  }
+  measure base "$DATA/runs/$BASE_RUN/inference.pt"
+  measure harmonic "$DATA/runs/$RUN/inference.pt"
+  "$PY" - "$DATA/eval/harmonic-base" "$DATA/eval/harmonic-harmonic" <<'PY'
 import json, sys
 names, rows = ("base", "harmonic"), []
 for name, root in zip(names, sys.argv[1:]):
@@ -54,22 +66,30 @@ for name, root in zip(names, sys.argv[1:]):
     wer = [v["generated_wer"] for v in values if v.get("generated_wer") is not None]
     mel = [v["mel_dtw"] for v in values if v.get("mel_dtw") is not None]
     periodicity = json.load(open(f"{root}/periodicity.json"))["summary"]
+    punctuation = json.load(open(f"{root}/punctuation.json"))
+    intonation = json.load(open(f"{root}/intonation.json"))
+    voices = json.load(open(f"{root}/voices.json"))
     rows.append({"run": name, "wer": sum(wer) / len(wer) if wer else None,
                  "mel_dtw": sum(mel) / len(mel) if mel else None,
-                 "hnr": {voice: value["model_hnr"] for voice, value in periodicity.items()},
-                 "deficit": {voice: value["deficit"] for voice, value in periodicity.items()},
+                 "hnr": {v: x["model_hnr"] for v, x in periodicity.items()},
+                 "deficit": {v: x["deficit"] for v, x in periodicity.items()},
+                 "punctuation": punctuation, "intonation": intonation, "voices": voices,
                  "samples": sum(v["samples"] for v in values)})
 for row in rows:
-    hnr = "  ".join(f"{voice} {value:5.2f} dB ({row['deficit'][voice]:+.2f})" for voice, value in row["hnr"].items())
+    hnr = "  ".join(f"{v} {x:5.2f} dB ({row['deficit'][v]:+.2f})" for v, x in row["hnr"].items())
     print(f"{row['run']:9} wer {row['wer']:.4f}  mel_dtw {row['mel_dtw']:.4f}  HNR {hnr}  n={row['samples']}")
 base, tuned = rows
-better = []
-for voice in base["hnr"]:
-    if tuned["hnr"][voice] > base["hnr"][voice] + 0.3:
-        better.append(f"{voice} +{tuned['hnr'][voice] - base['hnr'][voice]:.2f} dB")
 print()
-print("periodicity improved on: " + (", ".join(better) if better else "neither voice"))
+for voice in base["hnr"]:
+    print(f"{voice} periodicity {base['hnr'][voice]:5.2f} -> {tuned['hnr'][voice]:5.2f} dB "
+          f"({tuned['hnr'][voice] - base['hnr'][voice]:+.2f}), deficit {base['deficit'][voice]:+.2f} -> {tuned['deficit'][voice]:+.2f}")
 print(f"wer {base['wer']:.4f} -> {tuned['wer']:.4f}   mel {base['mel_dtw']:.4f} -> {tuned['mel_dtw']:.4f}")
+print(f"punctuation {json.dumps(base['punctuation'])[:160]}")
+print(f"            {json.dumps(tuned['punctuation'])[:160]}")
+print(f"intonation  {json.dumps(base['intonation'])[:160]}")
+print(f"            {json.dumps(tuned['intonation'])[:160]}")
+print(f"voices      {json.dumps(base['voices'])[:160]}")
+print(f"            {json.dumps(tuned['voices'])[:160]}")
 PY
   exit 0
 fi

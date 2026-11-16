@@ -58,16 +58,21 @@ SCP=(scp -o StrictHostKeyChecking=no -P "$PORT")
 [[ -n "$KEY" ]] && SCP+=(-i "$KEY")
 
 mkdir -p "$OUTPUT"
+# One tar stream per item rather than scp -r. The teacher audio is 20,790 small
+# FLAC files, and per-file transfer setup dominates: tar moves the same bytes in
+# a fraction of the time. -C dirname basename makes the archive contain exactly
+# the name we want, so extraction lands at $OUTPUT/$local and a second run
+# replaces rather than nests.
 copy() {
   local remote=$1 local=$2
   local target="$OUTPUT/$local"
+  local parent
+  parent=$(dirname "$target")
   echo "  $remote"
-  mkdir -p "$(dirname "$target")"
-  # scp -r copies a directory *inside* an existing target, which would give
-  # eval/es-1/es-1 on a second run. Clear the path first so the copy lands where
-  # the name says it does.
+  mkdir -p "$parent"
   rm -rf "$target"
-  "${SCP[@]}" -q -r "$HOST:$REMOTE/$remote" "$target"
+  "${SSH[@]}" "$HOST" "cd $REMOTE && tar -cf - -C '$(dirname "$remote")' '$(basename "$remote")'" \
+    | tar -xf - -C "$parent"
 }
 
 echo "== model and run"
@@ -130,7 +135,9 @@ echo "  $(wc -l < "$OUTPUT/SHA256SUMS" | tr -d ' ') files, $(du -sh "$OUTPUT" | 
 # hashes and the two lists are compared. A truncated scp is silent otherwise.
 echo "== verifying the copy against the host"
 ( cd "$OUTPUT" && awk '{print $2}' SHA256SUMS | sed 's|^\./||' | sed 's|^|data/|' ) > "$OUTPUT/.remote-paths"
-"${SSH[@]}" "$HOST" "cd $REMOTE && while IFS= read -r p; do sha256sum \"\$p\"; done" \
+# xargs batches the hashes; a shell loop would spawn one process per file and
+# there are twenty thousand of them.
+"${SSH[@]}" "$HOST" "cd $REMOTE && xargs sha256sum" \
   < "$OUTPUT/.remote-paths" > "$OUTPUT/.remote-sums"
 ( cd "$OUTPUT" && awk '{print $1, $2}' SHA256SUMS | sed 's| \./| |' | sort -k2 ) > "$OUTPUT/.local-sums"
 sed 's|  data/| |' "$OUTPUT/.remote-sums" | sort -k2 > "$OUTPUT/.remote-normalised"

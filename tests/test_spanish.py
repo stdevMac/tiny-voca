@@ -96,7 +96,12 @@ class NumberTests(unittest.TestCase):
             numbers_es.integer_words(1_000_000_000)
 
     def test_expand_handles_decimals_thousands_and_percentages(self):
-        self.assertEqual(numbers_es.expand("3,14"), "tres coma uno cuatro")
+        # The fraction is read as a number because that is what the front end
+        # does; a leading zero is read digit by digit, also as the front end does.
+        self.assertEqual(numbers_es.expand("3,14"), "tres coma catorce")
+        self.assertEqual(numbers_es.expand("1,05"), "uno coma cero cinco")
+        self.assertEqual(numbers_es.expand("27,90"), "veintisiete coma noventa")
+        self.assertEqual(numbers_es.expand("1.234,56"), "mil doscientos treinta y cuatro coma cincuenta y seis")
         self.assertEqual(numbers_es.expand("1.500"), "mil quinientos")
         self.assertEqual(numbers_es.expand("25%"), "veinticinco por ciento")
         self.assertEqual(numbers_es.expand("Son 4090 euros."), "Son cuatro mil noventa euros.")

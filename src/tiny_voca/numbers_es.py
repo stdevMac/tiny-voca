@@ -62,9 +62,20 @@ def integer_words(n):
 
 
 def decimal_words(text):
-    """``3,14`` -> ``tres coma catorce``; digits after the comma are read one by one."""
+    """``3,14`` -> ``tres coma catorce``.
+
+    The fraction is read as a number, not digit by digit, because that is what
+    the front end does: eSpeak says "cincuenta y seis" for ``,56`` and "noventa"
+    for ``,90``. Reading it digit by digit here made the word error rate
+    disagree with the audio on every price and measurement. A fraction with a
+    leading zero is the exception, and eSpeak reads that one digit by digit
+    (``1,05`` -> "uno coma cero cinco").
+    """
     whole, fraction = text.split(",")
-    digits = " ".join(integer_words(int(d)) for d in fraction)
+    if fraction.startswith("0"):
+        digits = " ".join(integer_words(int(d)) for d in fraction)
+    else:
+        digits = integer_words(int(fraction))
     return f"{integer_words(int(whole))} coma {digits}"
 
 

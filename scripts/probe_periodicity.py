@@ -89,9 +89,9 @@ def main():
     rows = []
     for index in pick(dataset, args.per_voice):
         item = dataset[index]
-        tokens, stress = item["tokens"][None], item["stress"][None]
-        length = torch.tensor([tokens.shape[1]])
-        speaker = torch.tensor([item["speaker"]])
+        tokens, stress = item["tokens"][None].to(args.device), item["stress"][None].to(args.device)
+        length = torch.tensor([tokens.shape[1]], device=args.device)
+        speaker = torch.tensor([item["speaker"]], device=args.device)
         with torch.inference_mode():
             wave, lengths, _ = model.synthesize(tokens, stress, length, speaker, speed=args.speed,
                                                 seed=args.seed, pitch_range=args.pitch_range)

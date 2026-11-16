@@ -32,8 +32,12 @@ BEST_CKPT="$COMPARE/inference-$(printf '%08d' "$BEST").pt"
 echo "best checkpoint: step $BEST"
 
 step "evaluating step $BEST with 20 samples per voice per split"
+# A stronger ASR than the screening model: with `small` multilingual the
+# transcriber's own Spanish errors can dominate the number we are judging the
+# voice by, and the English baseline's 0.6-0.9% came from an English-only model.
 "$PY" -m tiny_voca.evaluate --checkpoint "$BEST_CKPT" --annotations "$DATA/annotations-es" \
-  --output "$OUT" --tag "$RUN-step$BEST" --device cuda --splits validation test --per-voice 20 --novel 10
+  --output "$OUT" --tag "$RUN-step$BEST" --device cuda --splits validation test --per-voice 20 --novel 10 \
+  --asr-model large-v3-turbo
 
 step "exporting the winner"
 # The pipeline exported the final checkpoint. If the comparison picked an

@@ -58,6 +58,8 @@ def main():
     parser.add_argument("--batch-chars", type=int, default=3000,
                         help="Character budget per teacher call. Memory scales with the longest text in the "
                              "batch, so this is what actually keeps it inside VRAM; --batch is only a cap")
+    parser.add_argument("--asr-beam", type=int, default=3,
+                        help="Whisper beam size for screening. 1 is about twice as fast and slightly less accurate")
     parser.add_argument("--asr-device", default="cpu", choices=("cpu", "cuda"),
                         help="Where Whisper screens the clips. cuda is ~10x faster but runs synchronously")
     parser.add_argument("--seed", type=int, default=20261114)
@@ -136,7 +138,7 @@ def main():
             transcript, error = "", 1.0
             if not reasons:
                 segments, _ = asr.transcribe(resample_poly(w.astype("float32"), 2, 3), language=language.ASR_LANGUAGE,
-                                             beam_size=3, condition_on_previous_text=False)
+                                             beam_size=args.asr_beam, condition_on_previous_text=False)
                 transcript = " ".join(s.text.strip() for s in segments)
                 error = wer(normalize(row["text"]), normalize(transcript) or "<empty>")
                 if error > 0.15:

@@ -25,7 +25,7 @@ step() { echo; echo "== $*"; }
 step "ranking checkpoints $STEPS"
 # shellcheck disable=SC2086
 "$PY" scripts/compare_checkpoints.py --run "$DATA/runs/$RUN" --annotations "$DATA/annotations-es" \
-  --output "$COMPARE" --steps $STEPS --per-voice 6 --novel 4 --device cuda
+  --output "$COMPARE" --steps $STEPS --per-voice 6 --novel 4 --device cuda --asr-model large-v3-turbo
 
 BEST=$("$PY" -c "import json;print(json.load(open('$COMPARE/comparison.json'))['best']['step'])")
 BEST_CKPT="$COMPARE/inference-$(printf '%08d' "$BEST").pt"

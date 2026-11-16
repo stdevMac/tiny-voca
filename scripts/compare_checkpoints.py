@@ -40,6 +40,13 @@ def main():
     parser.add_argument("--per-voice", type=int, default=3, help="Clips per voice per split (keep it small)")
     parser.add_argument("--novel", type=int, default=4)
     parser.add_argument("--device", default="cuda")
+    # Ranking by word error rate only works if the transcriber is better than the
+    # models being ranked. The default screening model is `small` multilingual,
+    # whose own Spanish errors are the same order as the differences between
+    # checkpoints, so every checkpoint scores about the same and the tie-break
+    # (mel distance) decides by accident. A stronger model makes the first key
+    # mean something.
+    parser.add_argument("--asr-model", help="Whisper model for the comparison (default: the language's)")
     args = parser.parse_args()
     found = sorted(int(path.stem.split("-")[1]) for path in args.run.glob("step-*.pt") if path.stem.split("-")[1].isdigit())
     steps = args.steps or found
@@ -75,10 +82,13 @@ def main():
                  "--checkpoint", str(checkpoint), "--output", str(inference)])
         report = args.output / f"report-{step:08d}.json"
         if not report.is_file():
-            run([sys.executable, "-m", "tiny_voca.evaluate", "--checkpoint", str(inference),
-                 "--annotations", str(args.annotations), "--output", str(args.output / f"audio-{step:08d}"),
-                 "--tag", f"step-{step}", "--device", args.device, "--splits", "validation", "test",
-                 "--per-voice", str(args.per_voice), "--novel", str(args.novel)])
+            command = [sys.executable, "-m", "tiny_voca.evaluate", "--checkpoint", str(inference),
+                       "--annotations", str(args.annotations), "--output", str(args.output / f"audio-{step:08d}"),
+                       "--tag", f"step-{step}", "--device", args.device, "--splits", "validation", "test",
+                       "--per-voice", str(args.per_voice), "--novel", str(args.novel)]
+            if args.asr_model:
+                command += ["--asr-model", args.asr_model]
+            run(command)
             source = args.output / f"audio-{step:08d}" / "report.json"
             report.write_text(source.read_text(encoding="utf-8"))
         data = json.loads(report.read_text(encoding="utf-8"))

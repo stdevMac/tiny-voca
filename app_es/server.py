@@ -227,6 +227,38 @@ def limit_peak(wave: np.ndarray, peak: float = 0.99) -> np.ndarray:
     return wave * (peak / loudest) if loudest > peak else wave
 
 
+def trim_silence(wave: np.ndarray, sample_rate: int, lead_keep: float = 0.03,
+                 trail_keep: float = 0.15, floor_db: float = -40.0) -> np.ndarray:
+    """Cut the dead air the model puts around every utterance.
+
+    The recordings it learned from begin with about 0.6 s of lead-in silence, and
+    the duration predictor reproduces that faithfully: a four-sentence paragraph
+    came out 29% silence, with 0.72 s before the first word. That silence is not
+    digital zero either — it carries a faint tone inherited from the teacher, so
+    it is both dead air and a low-level artefact.
+
+    A little of it is kept on purpose: 30 ms at the start so the first consonant
+    is not clipped, 150 ms at the end so sentences in a paragraph still have a
+    natural gap between them.
+    """
+    frame = max(1, int(0.010 * sample_rate))
+    count = len(wave) // frame
+    if count < 4:
+        return wave
+    env = np.sqrt(np.mean(wave[:count * frame].reshape(count, frame) ** 2, axis=1))
+    peak = float(env.max())
+    if peak <= 0:
+        return wave
+    audible = env > peak * 10 ** (floor_db / 20)
+    if not audible.any():
+        return wave
+    first = int(np.argmax(audible))
+    last = count - int(np.argmax(audible[::-1]))
+    start = max(0, first * frame - int(lead_keep * sample_rate))
+    end = min(len(wave), last * frame + int(trail_keep * sample_rate))
+    return wave[start:end] if end > start else wave
+
+
 def _phonemize(text: str):
     try:
         return phonemize(text)
@@ -259,7 +291,7 @@ def _utterances(sentence, phones, voice, speed, pitch_shift, pitch_range, timing
             pass
         else:
             timing["model_ms"] += (time.perf_counter() - started) * 1000
-            yield wave, phones
+            yield trim_silence(wave, state.sample_rate), phones
             return
         timing["model_ms"] += (time.perf_counter() - started) * 1000
 

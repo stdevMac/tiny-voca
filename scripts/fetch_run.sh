@@ -71,6 +71,9 @@ done
 
 echo "== evaluation"
 copy "data/eval/$RUN" "eval/$RUN"
+if "${SSH[@]}" "$HOST" "cd $REMOTE && test -d data/eval/compare-$RUN" 2>/dev/null; then
+  copy "data/eval/compare-$RUN" "eval/compare-$RUN"
+fi
 
 echo "== voices and corpus text"
 copy "data/voices-es" "voices-es"

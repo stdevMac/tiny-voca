@@ -54,9 +54,14 @@ SCP=(scp -o StrictHostKeyChecking=no -P "$PORT")
 mkdir -p "$OUTPUT"
 copy() {
   local remote=$1 local=$2
+  local target="$OUTPUT/$local"
   echo "  $remote"
-  mkdir -p "$(dirname "$OUTPUT/$local")"
-  "${SCP[@]}" -q -r "$HOST:$REMOTE/$remote" "$OUTPUT/$local"
+  mkdir -p "$(dirname "$target")"
+  # scp -r copies a directory *inside* an existing target, which would give
+  # eval/es-1/es-1 on a second run. Clear the path first so the copy lands where
+  # the name says it does.
+  rm -rf "$target"
+  "${SCP[@]}" -q -r "$HOST:$REMOTE/$remote" "$target"
 }
 
 echo "== model and run"

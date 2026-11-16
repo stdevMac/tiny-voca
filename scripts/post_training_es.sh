@@ -49,6 +49,9 @@ cp "$BEST_CKPT" "$OUT/inference-best.pt"
 "$PY" scripts/check_onnx.py --checkpoint "$BEST_CKPT" --onnx "$OUT/tiny-voca-es-best-exact.onnx" \
   --release "$OUT/tiny-voca-es-best.onnx" --output "$OUT/onnx-check" --threads 4
 
+step "demo: a paragraph, a price, a date, a list, both voices"
+"$PY" scripts/demo_es.py --checkpoint "$BEST_CKPT" --output "$OUT/demo" --device cuda
+
 step "voice separation (pitch, not labels)"
 "$PY" scripts/probe_voices.py --report "$OUT/report.json" --audio-dir "$OUT/audio" \
   --references "$DATA/voices-es/references" --output "$OUT/voices.json"

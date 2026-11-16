@@ -53,7 +53,10 @@ def main():
     parser.add_argument("--deadline-file", type=Path)
     parser.add_argument("--deadline-margin", type=float, default=600)
     parser.add_argument("--limit", type=int, help="Only N scripts, spread across the length distribution (smoke test)")
-    parser.add_argument("--batch", type=int, default=BATCH, help="Clips per teacher call; larger is faster if VRAM allows")
+    parser.add_argument("--batch", type=int, default=64, help="Maximum clips per teacher call")
+    parser.add_argument("--batch-chars", type=int, default=3000,
+                        help="Character budget per teacher call. Memory scales with the longest text in the "
+                             "batch, so this is what actually keeps it inside VRAM; --batch is only a cap")
     parser.add_argument("--asr-device", default="cpu", choices=("cpu", "cuda"),
                         help="Where Whisper screens the clips. cuda is ~10x faster but runs synchronously")
     parser.add_argument("--seed", type=int, default=20261114)
@@ -195,20 +198,37 @@ def main():
             if len(futures) >= 2:
                 collect(futures.pop(0))
 
+    def batches(items, max_count, max_chars):
+        """Group clips so every call has roughly the same memory footprint.
+
+        Memory scales with the longest text in the batch and the number of
+        sequences, so a fixed clip count OOMs as soon as one long sentence lands
+        in it. Sorting by length and bounding the character total keeps batches
+        both safe and full, which is what makes a large batch usable at all.
+        """
+        ordered = sorted(items, key=lambda j: (j["row"]["character_count"], j["id"]))
+        current, chars = [], 0
+        for item in ordered:
+            size = item["row"]["character_count"]
+            if current and (len(current) >= max_count or chars + size > max_chars):
+                yield current
+                current, chars = [], 0
+            current.append(item)
+            chars += size
+        if current:
+            yield current
+
     stopped = False
     for attempt in (1, 2):
         existing = {uid: (status, n) for uid, status, n in db.execute("SELECT id, status, attempts FROM clips")}
         pending = [j for j in jobs if (attempt == 1 and j["id"] not in existing)
                    or (attempt == 2 and j["id"] in existing and existing[j["id"]][0] == "review" and existing[j["id"]][1] < 2)]
-        # Retries used to run one clip at a time; with a crash-safe batch handler
-        # they can use the same size, which matters when 5% of 18,000 clips retry.
-        size = args.batch
-        for start in range(0, len(pending), size):
+        for index, batch in enumerate(batches(pending, args.batch, args.batch_chars)):
             if out_of_time():
                 stopped = True
                 break
-            generate(pending[start:start + size], attempt, start // args.batch if attempt == 1 else start + 20000)
-            if (start // size) % 16 == 15:
+            generate(batch, attempt, index if attempt == 1 else index + 20000)
+            if index % 16 == 15:
                 report("generating")
         while futures:
             collect(futures.pop(0))

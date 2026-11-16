@@ -146,6 +146,38 @@ sentence, so the model learns a distribution rather than a single contour. That
 is a corpus change, not a model change, and it is cheaper than a bigger model —
 which is the point, since capacity is not what is limiting the tone.
 
+## The "echo" at word edges is in the teacher, not the model
+
+A listener described an echo-like timbre at the start and end of each word. The
+mechanism is real and it is in the synthesis head: `SourceFilter` is not a
+neural vocoder but a harmonic-plus-noise DSP head, and its envelope is applied
+through a 512-sample Hann STFT at a 128-sample hop, so every gain change is
+cross-faded over 21 ms.
+
+But the teacher's audio has the same smear, measured the same way at every
+voiced-to-unvoiced transition in the same sentence:
+
+| | tail (2 frames after) | pre-ring (2 frames before) |
+|---|---|---|
+| teacher | −6.4 dB | −20.3 dB |
+| model | −6.4 dB | −26.8 dB |
+
+The model is *better* than its teacher at pre-ring and identical at the tail. So
+the smear was in the corpus before training began.
+
+Three inference-time fixes were tried on the existing weights (`scripts/probe_smearing.py`),
+all of which leave the cepstral envelope untouched:
+
+| variant | tail | pre-ring | verdict |
+|---|---|---|---|
+| baseline | −6.4 dB | −26.8 dB | — |
+| 256-sample window, zero-padded | −3.9 dB | −25.4 dB | **worse** |
+| short window + pulse gating by voicing | −8.0 dB | −28.8 dB | 1.6 dB better, marginal |
+| smoothed sub-frame gains | no change at 93.75 or 187.5 Hz | | no effect |
+
+So this is not fixable at inference, and retraining on this corpus will reproduce
+it. The only fixes are a cleaner teacher or real recordings.
+
 ## What to change
 
 ### 1. Measure the teacher before generating, not after

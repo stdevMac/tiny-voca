@@ -98,6 +98,54 @@ checkpoint 8 of 10 samples are Castilian with distinción. Intelligibility is no
 what training improves after the first few thousand steps; prosody and artefacts
 are — and the accent is the one thing still short of target.
 
+## The one thing a listener notices: the tone is flat
+
+A listener described it as "the speech is good, but the tone and the sound is
+robotic". That is measurable, and it is inherited rather than introduced.
+
+F0 variation, in semitones of standard deviation over the voiced frames:
+
+| | F0 std |
+|---|---|
+| the reference voice (`voices-es/references/F2.wav`) | 2.07 st |
+| the teacher's corpus clips | 1.93 st |
+| the shipped model | 2.01 st |
+
+Real expressive Spanish sits nearer 3-4 st. The whole chain is flat, because
+each stage cloned the one before it: a VoiceDesign reference (2.07) was cloned by
+Qwen3-TTS into the corpus (1.93), and the 4.5M model reproduced that (2.01). The
+model is not the cause. A bigger model would reproduce the same flatness more
+faithfully.
+
+The timbre has the same origin. Against the teacher's own recording of the same
+sentence the model is within 2.6 dB in every octave band, with matched jitter
+(0.013 against 0.012) and matched spectral flatness (0.038 against 0.040), but it
+carries 2 dB more energy at the vocoder's frame rate and is 1 dB duller above
+6 kHz. The teacher has the same frame-rate artifact, weaker. So the "sound" is a
+synthetic-teacher artifact that the small vocoder slightly amplifies.
+
+**What fixes the tone now, without retraining.** The model takes `pitch_range`,
+which scales pitch movement around the utterance mean. It works exactly as
+intended:
+
+| pitch_range | F0 std |
+|---|---|
+| 1.0 (as trained) | 2.00 st |
+| 1.3 | 2.66 st |
+| 1.5 | 2.97 st |
+| 2.0 | 3.88 st |
+
+The Spanish web interface now defaults to 1.5, which is a 50% increase in pitch
+movement and lands inside the normal expressive range. This is a post-hoc
+inference setting, not something the model was trained to do, so it belongs in
+the interface rather than in the API default.
+
+**What fixes it properly, in round 2.** Generate the corpus with varied prosody
+instead of one flat delivery: several pitch ranges, speeds and registers per
+sentence, so the model learns a distribution rather than a single contour. That
+is a corpus change, not a model change, and it is cheaper than a bigger model —
+which is the point, since capacity is not what is limiting the tone.
+
 ## What to change
 
 ### 1. Measure the teacher before generating, not after

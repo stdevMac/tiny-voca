@@ -71,10 +71,24 @@ def final_slope(path, sample_rate=SAMPLE_RATE):
     return {"slope": slope, "tail_seconds": round(float(x[-1] - x[0]), 3), "voiced_frames": int(tail.sum())}
 
 
+# Spanish asks two different tunes. A yes/no question ends on a rise; a
+# question that opens with an interrogative word ends on a fall, because the
+# rise has already happened on that first stressed syllable. Scoring all
+# questions together hides the difference and lets a model that raises pitch
+# after every "¿" look correct, so the two are counted apart.
+WH = {"qué", "quién", "quiénes", "dónde", "cuándo", "cómo", "cuánto", "cuánta", "cuántos", "cuántas",
+      "cuál", "cuáles", "adónde"}
+WH_PAIR = {"por qué", "para qué", "a dónde", "de dónde", "desde cuándo", "hasta cuándo"}
+
+
 def classify(text):
     text = text.strip()
     if text.endswith("?"):
-        return "question"
+        body = text.lstrip("¿¡").strip()
+        words = body.split()
+        first = words[0].lower().strip(",.") if words else ""
+        pair = " ".join(words[:2]).lower().strip(",.") if len(words) > 1 else ""
+        return "question_wh" if first in WH or pair in WH_PAIR else "question_yesno"
     if text.endswith("!"):
         return "exclamation"
     return "statement"
@@ -119,8 +133,9 @@ def main():
     args = parser.parse_args()
 
     jobs = load_jobs(args)
-    buckets = {"question": [], "statement": [], "exclamation": []}
-    reference_buckets = {"question": [], "statement": [], "exclamation": []}
+    kinds = ("question_yesno", "question_wh", "statement", "exclamation")
+    buckets = {kind: [] for kind in kinds}
+    reference_buckets = {kind: [] for kind in kinds}
     for identifier, text, generated, reference in jobs:
         kind = classify(text)
         if len(buckets[kind]) >= (args.limit or 10 ** 9):
@@ -136,32 +151,43 @@ def main():
             if measured_reference is not None:
                 reference_buckets[kind].append(measured_reference)
 
+    def gap(values, against):
+        if not values or not against:
+            return None
+        return round(summarize(values)["mean_slope"] - summarize(against)["mean_slope"], 3)
+
     result = {"source": str(args.manifest or args.report), "audio_dir": str(args.audio_dir),
               "generated": {kind: summarize(values) for kind, values in buckets.items()}}
     if any(reference_buckets.values()):
         result["reference"] = {kind: summarize(values) for kind, values in reference_buckets.items()}
-    gap = None
-    if buckets["question"] and buckets["statement"]:
-        gap = (summarize(buckets["question"])["mean_slope"] - summarize(buckets["statement"])["mean_slope"])
-        result["question_minus_statement_semitones_per_second"] = round(gap, 3)
-    if reference_buckets["question"] and reference_buckets["statement"]:
-        reference_gap = (summarize(reference_buckets["question"])["mean_slope"]
-                         - summarize(reference_buckets["statement"])["mean_slope"])
-        result["reference_question_minus_statement_semitones_per_second"] = round(reference_gap, 3)
-        if gap is not None and reference_gap != 0:
-            result["gap_recovered"] = round(gap / reference_gap, 3)
+    for label, values in (("yesno", buckets["question_yesno"]), ("wh", buckets["question_wh"])):
+        value = gap(values, buckets["statement"])
+        if value is not None:
+            result[f"{label}_minus_statement_semitones_per_second"] = value
+    for label, values in (("yesno", reference_buckets["question_yesno"]), ("wh", reference_buckets["question_wh"])):
+        reference_gap = gap(values, reference_buckets["statement"])
+        if reference_gap is None:
+            continue
+        result[f"reference_{label}_minus_statement_semitones_per_second"] = reference_gap
+        measured_gap = result.get(f"{label}_minus_statement_semitones_per_second")
+        if measured_gap is not None and reference_gap != 0:
+            result[f"{label}_gap_recovered"] = round(measured_gap / reference_gap, 3)
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2))
-    questions, statements = summarize(buckets["question"]), summarize(buckets["statement"])
-    if questions["samples"] and statements["samples"]:
-        print(f"\nquestions rise {questions['rising_fraction']:.0%} of the time "
-              f"({questions['mean_slope']:+.2f} st/s), statements {statements['rising_fraction']:.0%} "
-              f"({statements['mean_slope']:+.2f} st/s)")
-    else:
-        print("\nnot enough questions and statements with voiced tails to compare")
+    for kind in kinds:
+        summary = summarize(buckets[kind])
+        if summary["samples"]:
+            print(f"{kind:16} n={summary['samples']:3}  {summary['mean_slope']:+.2f} st/s  "
+                  f"rising {summary['rising_fraction']:.0%}")
+    for label in ("yesno", "wh"):
+        measured_gap = result.get(f"{label}_minus_statement_semitones_per_second")
+        reference_gap = result.get(f"reference_{label}_minus_statement_semitones_per_second")
+        if measured_gap is not None:
+            detail = f" (teacher {reference_gap:+.2f}, {result.get(f'{label}_gap_recovered', 0):.0%} recovered)" if reference_gap is not None else ""
+            print(f"{label:16} gap vs statement {measured_gap:+.2f} st/s{detail}")
 
 
 if __name__ == "__main__":

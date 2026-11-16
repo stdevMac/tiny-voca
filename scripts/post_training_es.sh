@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 RUN=${RUN:-es-1}
 DATA=${DATA:-data}
 PY=${PY:-.venv/bin/python}
-STEPS=${STEPS:-"60000 80000 100000 104000"}
+STEPS=${STEPS:-"60000 80000 100000 110000 120000 122000"}
 COMPARE="$DATA/eval/compare-$RUN"
 OUT="$DATA/eval/$RUN"
 

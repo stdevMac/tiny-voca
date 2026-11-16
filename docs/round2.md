@@ -4,32 +4,50 @@ Everything under "measured" is a number from this run, not an expectation.
 
 ## Result
 
-The shipped model is **step 120,000** of a 122,000-step run, chosen by comparing
-six checkpoints rather than by taking the last one. On held-out text it is
-indistinguishable from its teacher:
+The shipped model is **step 142,000**: the 122,000-step run was polished with a
+20,000-step low-rate anneal (`scripts/anneal_es.sh`) and the annealed model beat
+the best of the original checkpoints on every prosody measure. On held-out text
+it is indistinguishable from its teacher:
 
 | split | model WER | teacher's own WER | clips |
 |---|---|---|---|
-| validation | 2.23% | 1.41% | 40 |
-| test | **2.12%** | **2.09%** | 40 |
+| validation | 2.00% | 1.41% | 40 |
+| test | **1.08%** | **2.09%** | 40 |
 | novel (unseen sentences) | **0.0%** | — | 28 |
 
 `reference_wer` is the teacher's audio transcribed by the same ASR, so it is the
 floor: whatever the transcriber cannot hear in the teacher, it cannot hear in the
-model either. On test the model is 0.03 points from that floor. The residual is
-ASR error on proper nouns ("Rajoy", "Gonzalo Martínez Díez"), not the voice.
+model either. On test the model is *below* that floor, which means the remaining
+errors are the transcriber's, not the voice's. The residual is ASR error on
+proper nouns ("Rajoy", "Gonzalo Martínez Díez").
+
+**The anneal.** The original run stopped at 122,000 steps with the learning rate
+still at 1.46e-4, so it never annealed. A 20,000-step branch at 3.0e-5 halving to
+1.5e-5 improved everything that matters and cost almost nothing that does:
+
+| metric | best original checkpoint (120k) | annealed (142k) |
+|---|---|---|
+| WER, validation + test | 1.71% | **1.54%** |
+| punctuation pairs rising more | 95.8% | **100%** |
+| yes/no intonation recovered | 83.4% | **87.5%** |
+| yes/no questions that rise | 86% | **93%** |
+| voice separation | 91% | **92%** |
+| mel DTW | **0.5433** | 0.5449 |
+
+The one regression is spectral distance to the teacher, by 0.3%. The prosody
+gains are the point of the model, so the annealed checkpoint ships.
 
 **Question intonation.** The corpus's questions are conversational and its
 statements encyclopedic, so a model can learn "chatty words mean rise" and still
 pass a held-out question test. The punctuation probe speaks each validation
-statement twice, changing only the punctuation: 24 pairs, **95.8% rise more as a
-question**, mean rise +4.93 semitones/second. The cue is the `¿`, not the words.
-Against the teacher's own gap, the model recovers **83%** on yes/no questions
-(+7.42 st/s of the teacher's +8.89).
+statement twice, changing only the punctuation: 24 pairs, **100% rise more as a
+question**, mean rise +5.42 semitones/second. The cue is the `¿`, not the words.
+Against the teacher's own gap, the model recovers **87.5%** on yes/no questions
+(+7.78 st/s of the teacher's +8.89).
 
-**Voices.** F2 242.8 Hz against a 258.7 Hz reference, M2 90.8 Hz against 90.9 Hz,
-over 54 clips each. Separation 17.03 semitones against the references' 18.11, so
-**91% of the reference gap**. Voxtral's `gender` label is unusable — it called
+**Voices.** F2 244.2 Hz against a 258.7 Hz reference, M2 90.4 Hz against 90.9 Hz,
+over 54 clips each. Separation 17.20 semitones against the references' 18.11, so
+**92% of the reference gap**. Voxtral's `gender` label is unusable — it called
 the 90 Hz voice female — which is why this is measured as pitch.
 
 **The checkpoint comparison.** All checkpoints from 80,000 on transcribe with
@@ -152,16 +170,18 @@ one, so "1.234,56" became "…coma cinco seis" while the front end says "…coma
 cincuenta y seis". Every price and measurement scored as an error the model did
 not make. It now matches eSpeak, with a leading zero still read digit by digit.
 
-### 8. Anneal the learning rate
+### 8. Anneal the learning rate — done, and it worked
 
 The run stopped at 122,000 steps with the learning rate still at 1.46e-4,
 because `--lr-half-life` is 100,000 and the schedule never reached its tail. A
-flat curve at that rate is a noise floor, not convergence. `scripts/anneal_es.sh`
-branches from `last.pt` at 3.0e-5 halving to 1.5e-5 over 20,000 steps, keeping
-the weights, critics and optimizer moments, and compares against the baseline
-with the same protocol. Round 2 should either anneal properly (a cosine or
-linear decay to ~1e-5) or set a half life that reaches the tail before the step
-budget runs out.
+flat curve at that rate is a noise floor, not convergence.
+`scripts/anneal_es.sh` branched from `last.pt` at 3.0e-5 halving to 1.5e-5 over
+20,000 steps, keeping the weights, critics and optimizer moments, and beat the
+best original checkpoint on WER, punctuation, intonation and voice separation.
+
+Round 2 should not repeat this experiment; it should build the anneal into the
+schedule from the start — a cosine or linear decay to ~1e-5 that reaches its
+tail before the step budget runs out, rather than a second run to fix it.
 
 ## What not to change
 
@@ -180,14 +200,13 @@ mismatch is harmless.
 
 ## Open questions for round 2
 
-- **Is the model capacity-limited?** Yes, on this evidence. Predicted mel bottomed
-  at step 91,000, the shipped checkpoint is 120,000, and 122,000 was worse on
-  spectral distance. Thirty-one thousand steps after the plateau bought nothing.
-  Round 2's first experiment should be a larger model, not more data or more
-  steps — the corpus already carries 24.5 hours against the English 19.
-- **Does the anneal help?** `scripts/anneal_es.sh` answers this for round 1. If a
-  20,000-step low-rate tail does not beat step 120,000, the plateau is capacity,
-  not schedule.
+- **Is the model capacity-limited?** Partly, and the anneal separates the two
+  causes. Predicted mel bottomed at step 91,000 and 31,000 further steps at the
+  original rate bought nothing — but 20,000 steps at a tenth of that rate
+  improved WER, punctuation, intonation and voice separation all at once. So the
+  plateau was *schedule*, not capacity, and the model still had room. Round 2's
+  first experiment should be a proper anneal, then a larger model if that
+  saturates too.
 - **Can the formal register be fixed without breaking the conversational one?**
   Adding usted-form questions risks pulling the tune back toward statements, so
   the punctuation probe has to run on every candidate.
@@ -202,25 +221,40 @@ mismatch is harmless.
 
 ## What was saved, and what it is for
 
-The GPU host is deleted after every run, so the local copy is the run. It lives
-at `~/tiny-voca-artifacts/es-1` (3.9 GB, 22,819 files) with a `SHA256SUMS` that
-was checked against the host's own hashes, not just against itself.
+The GPU host is deleted after every run, so the local copy is the run. It is two
+sibling directories under `~/tiny-voca-artifacts`, each with its own
+`SHA256SUMS` checked against the host's own hashes rather than only against
+itself.
+
+**`es-1/` (3.9 GB, 22,819 files) is the run**: corpus, teacher audio, alignment,
+every checkpoint, and the 120,000-step model with its full evidence.
 
 | path | what it is | why keep it |
 |---|---|---|
-| `eval/es-1/inference-best.pt` | the shipped model, step 120,000 | 18 MB; the deliverable |
-| `eval/es-1/tiny-voca-es-best.onnx` | ONNX export of the same weights | 21 MB; runs at ~30x realtime |
 | `runs/es-1/last.pt` | full training state at 122,000 | 87 MB; branch from it instead of retraining |
 | `runs/es-1/step-*.pt` | numbered checkpoints | 1.2 GB; re-rank or re-branch |
-| `eval/es-1/` | report, demo audio, intonation, punctuation, voices, Voxtral | the evidence for every number above |
+| `eval/es-1/inference-best.pt` | best original checkpoint, step 120,000 | 18 MB; the baseline the anneal beat |
+| `eval/es-1/` | report, demo audio, intonation, punctuation, voices, Voxtral | the evidence for the baseline |
 | `audio-es/audio/` | 20,790 teacher FLAC, 24.5 h | 2.4 GB; the expensive thing to regenerate |
 | `annotations-es/` | alignment and the split lists | 65 MB; keeps the same test set |
 | `scripts-full.jsonl` | the 11,050-sentence corpus | 6 MB; the text everything derives from |
 | `voices-es/` | the two reference recordings | 5 MB; the voices the model clones |
+| `provenance.txt` | git commit, 120 packages, torch/CUDA, eSpeak, hashes | what produced the weights |
+| `logs/` | pipeline, train, post-training, anneal | the run as it happened |
+
+**`es-1-anneal/` (446 MB) is the shipped model**, step 142,000.
+
+| path | what it is | why keep it |
+|---|---|---|
+| `runs/es-1-anneal/inference.pt` | **the deliverable**, 18 MB | 4.5M parameters, two voices |
+| `eval/anneal-es-1-anneal/tiny-voca-es-anneal.onnx` | ONNX export | 21 MB; runs at ~30x realtime |
+| `runs/es-1-anneal/last.pt` | full state at 142,000 | 87 MB; branch from it, do not retrain |
+| `eval/anneal-es-1-anneal/` | report, demo, punctuation, intonation, voices, ONNX check | the evidence for every shipped number |
+| `eval/anneal-es-1/` | the same protocol on the baseline | the comparison that chose the winner |
 
 Not saved: `features-es` (11 GB). It rebuilds from the audio in about ten
 minutes with `tiny_voca.prepare`, so it is derived data, not an artifact.
 
-To rebuild on a new host: copy this directory, `pip install -e .`, then
+To rebuild on a new host: copy both directories, `pip install -e .`, then
 `tiny_voca.prepare` → `tiny_voca.annotate` → `tiny_voca.train --init-from
-runs/es-1/last.pt`. The teacher is never needed again.
+es-1-anneal/runs/es-1-anneal/last.pt`. The teacher is never needed again.

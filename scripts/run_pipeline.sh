@@ -112,13 +112,28 @@ fi
 # train.py saves and exits at --max-seconds (default one hour), which is right for
 # a cloud box that might vanish but wrong here: without this loop the pipeline
 # would evaluate a one-hour checkpoint and call it done. Resume until --steps.
+# How far the run has got. last.pt is authoritative; metrics.jsonl is the
+# fallback, because a failed read here would make the loop resume a run that is
+# already finished, and train.py refuses that with an error that would kill the
+# pipeline before evaluate and export ever run.
+current_step() {
+  "$PY" -c "import torch;print(torch.load('$1/last.pt',map_location='cpu',weights_only=True)['step'])" 2>/dev/null \
+    || tail -1 "$1/metrics.jsonl" 2>/dev/null | "$PY" -c "import json,sys;print(json.loads(sys.stdin.read())['step'])" 2>/dev/null \
+    || echo 0
+}
+
 run_train() {
   local out="$DATA/runs/$RUN" resume="" step
   for attempt in 1 2 3 4 5 6 7 8; do
-    "$PY" -m tiny_voca.train --train "$ANN/train.jsonl" --validation "$ANN/validation.jsonl" \
-      --output "$out" --device cuda --steps "$STEPS" --gan-start 8000 --gan-ratio 0.7 --teacher-final 0 \
-      --max-seconds "$TRAIN_SECONDS" --deadline-file "$DATA/budget.json" $resume || return 1
-    step=$("$PY" -c "import torch;print(torch.load('$out/last.pt',map_location='cpu',weights_only=True)['step'])" 2>/dev/null || echo 0)
+    if ! "$PY" -m tiny_voca.train --train "$ANN/train.jsonl" --validation "$ANN/validation.jsonl" \
+         --output "$out" --device cuda --steps "$STEPS" --gan-start 8000 --gan-ratio 0.7 --teacher-final 0 \
+         --max-seconds "$TRAIN_SECONDS" --deadline-file "$DATA/budget.json" $resume; then
+      # A resume that finds the run already at --steps is done, not broken.
+      step=$(current_step "$out")
+      [ "$step" -ge "$STEPS" ] && return 0
+      return 1
+    fi
+    step=$(current_step "$out")
     echo "  training at step $step of $STEPS"
     [ "$step" -ge "$STEPS" ] && return 0
     resume="--resume $out/last.pt"

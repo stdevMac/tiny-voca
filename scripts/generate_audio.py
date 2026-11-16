@@ -104,8 +104,11 @@ def main():
                                           dtype=dtype, attn_implementation="sdpa")
     prompts = {v: model.create_voice_clone_prompt(ref_audio=str(args.references / f"{v}.wav"), ref_text=references[v]["text"],
                                                   x_vector_only_mode=False)[0] for v in ("F2", "M2")}
+    # Screening runs on the CPU in a background thread while the GPU generates the
+    # next batch, so it needs most of the cores but must not starve the main thread.
+    threads = max(1, min(12, (os.cpu_count() or 4) - 4))
     asr = WhisperModel(language.ASR_MODEL, device=args.asr_device,
-                       compute_type="int8" if args.asr_device == "cpu" else "float16", cpu_threads=6)
+                       compute_type="int8" if args.asr_device == "cpu" else "float16", cpu_threads=threads)
     normalize = normalizer()
     # On the CPU the transcription runs in a background thread so it overlaps the
     # next GPU batch. On CUDA it runs in the main thread: two CUDA contexts in

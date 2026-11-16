@@ -76,6 +76,11 @@ NOVEL_SENTENCES = (
     "El tren de las ocho y media sale del andén número cuatro.",
     "Aquella mañana, el cielo estaba tan limpio que se veían las montañas.",
     "Los niños corrían por la playa mientras sus padres preparaban la cena.",
+    # A yes/no question, because Spanish marks it with intonation alone and the
+    # rest of this list would never test that. The exclamation covers the other
+    # tune the model has to produce and word error rate cannot see.
+    "¿Te apetece que vayamos a dar un paseo por la playa esta tarde?",
+    "¡Menuda sorpresa nos dio tu hermano con aquella noticia!",
 )
 
 

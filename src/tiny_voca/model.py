@@ -204,7 +204,7 @@ class SourceFilter(nn.Module):
         # then the same whether it stands alone or is padded inside a batch.
         return filtered(F.pad(source, (0, fft // 2)), response, fft, hop, window)[:, :source.shape[-1]]
 
-    def forward(self, hidden, f0, lengths, noise=None, phase=None):
+    def forward(self, hidden, f0, lengths, noise=None, phase=None, variant=None, anticausal_scale=1.0):
         c = self.config
         frames = hidden.shape[1]
         samples = frames * c.hop
@@ -219,6 +219,14 @@ class SourceFilter(nn.Module):
             here, following = sub // self.harmonic_steps, torch.minimum((sub + 1) // self.harmonic_steps, last)
             causal = 0.5 * (self._take(h[..., :c.cep_causal], here) + self._take(h[..., :c.cep_causal], following)) * self.causal_lifter
             anti = 0.5 * (self._take(h[..., c.cep_causal:split], here) + self._take(h[..., c.cep_causal:split], following)) * self.anti_lifter
+            # The anticausal half of the cepstrum is the only part of the filter that
+            # can put energy before a pulse, i.e. the only part that can pre-echo. It
+            # is scaled rather than switched so a partial setting can keep the timbre
+            # it was trained for while removing the smear.
+            if anticausal_scale != 1.0:
+                anti = anti * anticausal_scale
+            if variant == "minimum_phase":
+                anti = torch.zeros_like(anti)
             causal = torch.cat((causal[..., :1] + h[..., split:].flatten(1).gather(1, sub)[..., None], causal[..., 1:]), dim=-1)
             harmonic_response = cepstrum_response(causal, anti, c.synth_fft)
             # Noise branch: one envelope per frame, four gains per frame for sharp consonants.
@@ -233,6 +241,12 @@ class SourceFilter(nn.Module):
             pulses = pulse_train(f0, c.sample_rate, c.hop, c.harmonic_limit, phase) * audible
             if noise is None:
                 noise = torch.randn(hidden.shape[0], samples, device=hidden.device)
+            # Diagnosing the word-edge artifact: render one branch at a time, so a
+            # listener can say which of the two carries it.
+            if variant == "harmonic_only":
+                noise = torch.zeros_like(noise)
+            elif variant == "noise_only":
+                pulses = torch.zeros_like(pulses)
             wave = (self._shape(pulses, harmonic_response, c.synth_fft, c.synth_hop, self.synth_window)
                     + self._shape(noise * audible, noise_response, c.noise_fft, c.noise_hop, self.noise_window))
             return wave * audible
@@ -348,7 +362,7 @@ class TinyVoca(nn.Module):
 
     @torch.inference_mode()
     def synthesize(self, tokens, stress, lengths, speakers, speed=1.0, pitch_shift=0.0, seed=0, pitch_range=1.0, pitch_jitter=0.0,
-                   voiced_vowels=True):
+                   voiced_vowels=True, variant=None, anticausal_scale=1.0):
         """Free-running synthesis: predicted durations, pitch, voicing and energy."""
         if not math.isfinite(speed) or not 0.25 <= speed <= 4 or not math.isfinite(pitch_shift) or not 0 <= pitch_range <= 3:
             raise ValueError("speed must be between 0.25 and 4, pitch_shift finite and pitch_range between 0 and 3")
@@ -375,5 +389,6 @@ class TinyVoca(nn.Module):
         pitch = prosody[..., 0] + pitch_shift
         if pitch_jitter > 0:
             pitch = pitch + self.pitch_wobble(pitch.shape, pitch_jitter, seed, pitch.device)
-        wave = self.vocoder(acoustic, self.frequency(pitch), frame_lengths, noise=noise.to(hidden.device))
+        wave = self.vocoder(acoustic, self.frequency(pitch), frame_lengths, noise=noise.to(hidden.device),
+                            variant=variant, anticausal_scale=anticausal_scale)
         return wave, frame_lengths * self.config.hop, {"durations": durations, "prosody": prosody, "frame_mask": frame_mask}

@@ -17,6 +17,7 @@ JSONL form tiny_voca.prepare reads), <root>/review.jsonl (rejected clips).
 
 import argparse
 import concurrent.futures
+import gc
 import json
 import os
 from pathlib import Path
@@ -159,12 +160,12 @@ def main():
     def collect(future):
         store(future.result())
 
-    def fail(batch, attempt, error):
+    def fail(batch, attempt, message):
         """A crashed batch must not kill the run: mark it for the retry pass."""
         records = []
         for job in batch:
             payload = {"id": job["id"], "text_id": job["row"]["id"], "voice_id": job["voice"], "text": job["row"]["text"],
-                       "split": job["row"]["split"], "review_reasons": [f"generation_error: {type(error).__name__}: {error}"]}
+                       "split": job["row"]["split"], "review_reasons": [f"generation_error: {message}"]}
             records.append((job["id"], "review", attempt, json.dumps(payload)))
         store(records)
 
@@ -176,19 +177,24 @@ def main():
             waves, rate = model.generate_voice_clone(text=[j["row"]["text"] for j in batch], language=[language.TTS_LANGUAGE] * len(batch),
                                                      voice_clone_prompt=[prompts[j["voice"]] for j in batch], max_new_tokens=600)
         except Exception as error:
-            # Out of memory is recoverable by halving the batch; anything else is
-            # recorded for the retry pass so one bad batch cannot end the run.
-            out_of_memory = isinstance(error, torch.cuda.OutOfMemoryError) or "out of memory" in str(error).lower()
-            if out_of_memory and len(batch) > 1:
+            message = f"{type(error).__name__}: {error}"
+            out_of_memory = isinstance(error, torch.cuda.OutOfMemoryError) or "out of memory" in message.lower()
+            # Drop every reference to the failed call before asking for the memory
+            # back: the traceback keeps the generation's KV cache alive, and one
+            # OOM that is not released poisons every batch after it.
+            del error
+            if out_of_memory:
+                gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 if hasattr(torch, "mps") and torch.backends.mps.is_available():
                     torch.mps.empty_cache()
+            if out_of_memory and len(batch) > 1:
                 middle = len(batch) // 2
                 generate(batch[:middle], attempt, batch_id)
                 generate(batch[middle:], attempt, batch_id + 50000)
                 return
-            fail(batch, attempt, error)
+            fail(batch, attempt, message)
             return
         seconds = round(time.time() - start, 3)
         if pool is None:

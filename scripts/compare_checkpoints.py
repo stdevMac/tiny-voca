@@ -19,6 +19,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import torch
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
@@ -44,11 +46,28 @@ def main():
     if not steps:
         raise SystemExit(f"no numbered checkpoints in {args.run}; train with --keep-every")
     args.output.mkdir(parents=True, exist_ok=True)
+
+    def resolve(step):
+        """The numbered checkpoint, or last.pt when it holds that same step.
+
+        The final step is not a multiple of --keep-every, so it is only ever
+        written as last.pt. That is usually the checkpoint worth comparing.
+        """
+        numbered = args.run / f"step-{step:08d}.pt"
+        if numbered.is_file():
+            return numbered
+        last = args.run / "last.pt"
+        if last.is_file():
+            state = torch.load(last, map_location="cpu", weights_only=True)
+            if int(state["step"]) == step:
+                return last
+        return None
+
     rows = []
     for step in steps:
-        checkpoint = args.run / f"step-{step:08d}.pt"
-        if not checkpoint.is_file():
-            print(f"skip {step}: {checkpoint.name} is missing")
+        checkpoint = resolve(step)
+        if checkpoint is None:
+            print(f"skip {step}: no checkpoint at that step", flush=True)
             continue
         inference = args.output / f"inference-{step:08d}.pt"
         if not inference.is_file():

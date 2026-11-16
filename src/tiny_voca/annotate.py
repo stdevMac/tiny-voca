@@ -150,6 +150,10 @@ def main():
     parser.add_argument("--refine-band", type=int, default=4)
     parser.add_argument("--stage", default="ctc", help="Durations used for the final manifests: ctc or refined-<n>")
     parser.add_argument("--min-pause-frames", type=int, default=AlignmentSettings.min_pause_frames)
+    parser.add_argument("--onset-offset", type=float, default=AlignmentSettings.onset_offset_seconds,
+                        help="Phone onset relative to its first emission frame, in seconds. The English "
+                             "calibration is -0.019; a different teacher or language can need another value, "
+                             "visible as a mean_offset_frames bias in the timing probe")
     parser.add_argument("--max-weak-phone-fraction", type=float, default=0.25)
     parser.add_argument("--min-token-probability", type=float, default=0.5)
     parser.add_argument("--max-phone-frames", type=int, default=70)
@@ -158,7 +162,7 @@ def main():
     parser.add_argument("--max-phones-per-second", type=float, default=30.0)
     args = parser.parse_args()
     config = Config.from_dict(json.loads(args.config.read_text())) if args.config else Config()
-    settings = AlignmentSettings(min_pause_frames=args.min_pause_frames)
+    settings = AlignmentSettings(min_pause_frames=args.min_pause_frames, onset_offset_seconds=args.onset_offset)
     limits = {key: getattr(args, key) for key in ("max_weak_phone_fraction", "min_token_probability", "max_phone_frames",
                                                     "min_vowel_voiced", "min_phones_per_second", "max_phones_per_second")}
     started = time.time()

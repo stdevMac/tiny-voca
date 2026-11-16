@@ -49,6 +49,10 @@ cp "$BEST_CKPT" "$OUT/inference-best.pt"
 "$PY" scripts/check_onnx.py --checkpoint "$BEST_CKPT" --onnx "$OUT/tiny-voca-es-best-exact.onnx" \
   --release "$OUT/tiny-voca-es-best.onnx" --output "$OUT/onnx-check" --threads 4
 
+step "voice separation (pitch, not labels)"
+"$PY" scripts/probe_voices.py --report "$OUT/report.json" --audio-dir "$OUT/audio" \
+  --references "$DATA/voices-es/references" --output "$OUT/voices.json"
+
 step "question intonation"
 "$PY" scripts/probe_intonation.py --report "$OUT/report.json" --audio-dir "$OUT/audio" \
   --output "$OUT/intonation.json" --limit 40

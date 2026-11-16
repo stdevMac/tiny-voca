@@ -158,13 +158,26 @@ def main():
         record = {"audio": str(path), "text": row["text"], "voice": row.get("voice_id")}
         try:
             transcript = call(args.provider, [audio_part(path), {"type": "text", "text": TRANSCRIBE_PROMPT}], max_tokens=300)
-            record["transcript"] = transcript
+            # Keep the transcriber's text apart from the judge's: the judge also
+            # returns a "transcript", and letting it overwrite this one hid which
+            # text the word error rate was actually computed against.
+            record["asr_transcript"] = transcript
             record["wer"] = round(word_error(row["text"], transcript), 4)
         except Exception as error:
             record["transcribe_error"] = str(error)
         if not args.no_judge:
             try:
-                record.update(describe(args.provider, path))
+                judged = describe(args.provider, path)
+                if "transcript" in judged:
+                    judged["judge_transcript"] = judged.pop("transcript")
+                record.update(judged)
+                # The transcriber paraphrases: it writes "las 8:30" for "las
+                # ocho y media" and "plataforma" for "andén", which scores as
+                # errors the voice did not make. The judge is asked for a
+                # verbatim transcription and gives one, so it is the better
+                # reference for the word error rate.
+                if record.get("judge_transcript"):
+                    record["wer"] = round(word_error(row["text"], record["judge_transcript"]), 4)
             except Exception as error:
                 record["judge_error"] = str(error)
             voice = row.get("voice_id")

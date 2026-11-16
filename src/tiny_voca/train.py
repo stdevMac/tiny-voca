@@ -18,12 +18,12 @@ from torch import nn
 from torch.nn import functional as F
 from .config import CHECKPOINT_FORMAT, Config
 from .data import AnnotatedDataset, BucketSampler, collate
-from .losses import Discriminators, SpectralLoss, discriminator_loss, generator_gan_loss, masked_mean
+from .losses import Discriminators, HarmonicLoss, SpectralLoss, discriminator_loss, generator_gan_loss, masked_mean
 from .model import TinyVoca
 from .text import frontend_fingerprint, frontend_identity
 
 WEIGHTS = {"duration": 1.0, "pause": 1.0, "pitch": 2.0, "pitch_spread": 2.0, "voicing": 1.0, "energy": 1.0, "mel_head": 2.0,
-           "stft": 2.0, "mel": 10.0}
+           "stft": 2.0, "mel": 10.0, "harmonic": 0.0}
 SEMITONES = 12 / math.log(2)
 
 
@@ -40,6 +40,7 @@ class TrainingSystem(nn.Module):
         self.model = TinyVoca(config)
         self.mel_head = nn.Linear(config.channels, config.n_mels)   # auxiliary, not exported
         self.spectral = SpectralLoss(config.sample_rate)
+        self.harmonic = HarmonicLoss(config.sample_rate)
 
     def objective(self, batch, teacher_probability, weights=WEIGHTS, random_phase=True):
         """Loss on full utterances. Returns ``(loss, terms, auxiliary)``.
@@ -82,10 +83,18 @@ class TrainingSystem(nn.Module):
         mel_target = (batch["mel"] - c.mel_mean) / c.mel_scale
         mel_head = masked_mean((self.mel_head(acoustic).float() - mel_target).abs().mean(-1), frame_mask)
         phase = 2 * math.pi * torch.rand(len(lengths), device=lengths.device) if random_phase else None
-        wave = m.vocoder(acoustic, m.frequency(target[..., 0]), lengths, phase=phase)
+        f0 = m.frequency(target[..., 0])
+        wave = m.vocoder(acoustic, f0, lengths, phase=phase)
         stft, mel = self.spectral(wave, batch["wave"], lengths * c.hop)
+        # Inter-harmonic energy only means something where there is a pitch to be
+        # harmonic with, and only where that pitch was recorded rather than
+        # interpolated across an unvoiced stretch.
+        harmonic = duration.new_zeros(())
+        if weights["harmonic"]:
+            voiced = frame_mask * trusted * (target[..., 1] > 0.5).to(frame_mask.dtype)
+            harmonic = self.harmonic(wave, batch["wave"], f0, voiced)
         terms = dict(duration=duration, pause=pause, pitch=pitch, pitch_spread=pitch_spread, voicing=voicing, energy=energy,
-                     mel_head=mel_head, stft=stft, mel=mel)
+                     mel_head=mel_head, stft=stft, mel=mel, harmonic=harmonic)
         loss = sum(weights[name] * value for name, value in terms.items())
         with torch.no_grad():
             voiced = sung

@@ -65,6 +65,57 @@ class SpectralLoss(nn.Module):
         return total / len(self.resolutions), mel
 
 
+class HarmonicLoss(nn.Module):
+    """Penalise the share of spectral energy that falls between the harmonics.
+
+    The multi-resolution STFT and mel distances are satisfied by a spectrum that
+    is right on average, and that includes one whose partials are smeared into
+    the gaps between them: the error is spread thinly over many bins, so a
+    per-bin magnitude distance barely sees it. A listener does, as roughness at
+    the edges of words, and it shows up as lost periodicity (HNR) against the
+    recording the model was taught from.
+
+    For every voiced frame this compares the inter-harmonic share of the
+    prediction's spectrum with the recording's own share and penalises the log
+    ratio. It is scale free, so it cannot be satisfied by turning the audio up
+    or down, and a prediction already as clean as its teacher costs nothing,
+    which keeps it from fighting the reconstruction loss on clean material.
+
+    ``fft``/``hop`` default to the acoustic frame rate, so one spectrum frame is
+    one acoustic frame and the per-frame F0 lines up without resampling.
+    """
+
+    def __init__(self, sample_rate, fft=1024, hop=256, ceiling=8000.0, tolerance=1.5, floor=0.02, limit=20.0):
+        super().__init__()
+        self.fft, self.hop, self.ceiling, self.floor, self.limit = fft, hop, ceiling, floor, limit
+        # Half-width of a harmonic in Hz. One and a half bins covers the leakage
+        # of a Hann window without reaching halfway to the next partial.
+        self.tolerance = tolerance * sample_rate / fft
+        self.register_buffer("window", torch.hann_window(fft), persistent=False)
+        self.register_buffer("frequencies", torch.fft.rfftfreq(fft, 1 / sample_rate), persistent=False)
+
+    def share(self, wave, f0):
+        """Energy between the partials over energy on them, [B, frames]."""
+        spectrum = magnitude(wave, self.fft, self.hop, self.window)
+        frames = min(f0.shape[1], spectrum.shape[-1])
+        energy = spectrum[..., :frames].transpose(1, 2)                       # [B, frames, bins]
+        f0 = f0[:, :frames].clamp_min(1.0)[..., None]                         # [B, frames, 1]
+        multiple = self.frequencies[None, None] / f0
+        distance = (multiple - multiple.round()).abs() * f0                   # Hz to the nearest partial
+        band = self.frequencies[None, None] <= self.ceiling
+        harmonic = (distance <= self.tolerance) & band
+        on = (energy * harmonic).sum(-1)
+        between = (energy * (band & ~harmonic)).sum(-1)
+        # Both ends are clamped: a frame with almost no harmonic energy would
+        # otherwise return an unbounded ratio and dominate the batch.
+        return (between / on.clamp_min(1e-6)).clamp(self.floor, self.limit)
+
+    def forward(self, predicted, target, f0, mask):
+        predicted, target = predicted[:, :mask.shape[1] * self.hop], target[:, :mask.shape[1] * self.hop]
+        error = (self.share(predicted, f0).log() - self.share(target, f0).log()).abs()
+        return masked_mean(error, mask)
+
+
 class PeriodDiscriminator(nn.Module):
     def __init__(self, period, channels=(1, 32, 96, 192, 384)):
         super().__init__()

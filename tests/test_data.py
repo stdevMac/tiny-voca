@@ -16,7 +16,7 @@ from tiny_voca.annotate import load_acoustic_rows
 from tiny_voca.config import Config
 from tiny_voca.data import AnnotatedDataset, BucketSampler, collate
 from tiny_voca.journal import append, recover
-from tiny_voca.losses import SpectralLoss, mel_filterbank
+from tiny_voca.losses import HarmonicLoss, SpectralLoss, mel_filterbank
 from tiny_voca.train import balanced_indices, check_leakage
 from helpers import small_config, write_annotations
 
@@ -167,6 +167,21 @@ class DataTests(unittest.TestCase):
         filters = mel_filterbank(24000, 1024, 80)
         self.assertEqual(filters.shape, (80, 513))
         self.assertTrue(bool((filters >= 0).all()) and bool((filters.sum(1) > 0).all()))
+
+    def test_harmonic_loss_punishes_energy_between_the_partials(self):
+        loss = HarmonicLoss(24000)
+        sample_rate, f0_hz, frames = 24000, 200.0, 40
+        time = torch.arange(frames * 256) / sample_rate
+        clean = sum(torch.sin(2 * math.pi * k * f0_hz * time) / k for k in range(1, 30))[None]
+        f0, voiced = torch.full((1, frames), f0_hz), torch.ones(1, frames)
+        self.assertLess(float(loss(clean, clean, f0, voiced)), 1e-3)
+        # A partial exactly between two harmonics is what the term exists to see.
+        smeared = (clean + 0.3 * torch.sin(2 * math.pi * 1.5 * f0_hz * time)[None]).requires_grad_()
+        self.assertGreater(float(loss(smeared, clean, f0, voiced).detach()), 0.2)
+        loss(smeared, clean, f0, voiced).backward()
+        self.assertTrue(torch.isfinite(smeared.grad).all())
+        # Without a pitch there is no harmonic structure to compare against.
+        self.assertEqual(float(loss(smeared.detach(), clean, f0, torch.zeros(1, frames))), 0.0)
 
     @unittest.skipUnless(importlib.util.find_spec("librosa") and importlib.util.find_spec("pyarrow"), "requires preparation extras")
     def test_acoustic_preparation_interrupt_resume_provenance_and_bad_rows(self):

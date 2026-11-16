@@ -39,6 +39,10 @@ step "question intonation"
 "$PY" scripts/probe_intonation.py --report "$OUT/report.json" --audio-dir "$OUT/audio" \
   --output "$OUT/intonation.json" --limit 40
 
+step "punctuation-only intonation (same words, only the marks change)"
+"$PY" scripts/probe_punctuation.py --checkpoint "$BEST_CKPT" --annotations "$DATA/annotations-es" \
+  --output "$OUT/punctuation" --per-voice 12 --device cuda
+
 step "teacher intonation, for the target"
 if [ -f "$DATA/audio-es/manifest.jsonl" ]; then
   "$PY" scripts/probe_intonation.py --manifest "$DATA/audio-es/manifest.jsonl" \

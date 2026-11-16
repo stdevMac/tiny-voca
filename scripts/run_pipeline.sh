@@ -72,15 +72,34 @@ stage audio       "$PY" scripts/generate_audio.py --scripts "$DATA/scripts-$MODE
                     --references "$DATA/voices-es/references" --voices "$DATA/voices-es/voices.json" \
                     --asr-device "$ASR_DEVICE" --batch "$BATCH" --batch-chars "$BATCH_CHARS" --deadline-file "$DATA/budget.json" ${LIMIT:+--limit "$LIMIT"}
 stage split       "$PY" scripts/split_manifest.py --root "$AUDIO" --force
+# A stage that is interrupted must be restartable. prepare and annotate both
+# refuse to reuse a directory whose recorded inputs no longer match, which is
+# exactly what happens after a crash: the manifest was rewritten. Resume when
+# that works, otherwise start the stage's directory over rather than dying.
 run_prepare() {
+  local split
   for split in train validation test; do
-    "$PY" -m tiny_voca.prepare --inputs "$AUDIO/$split.jsonl" --split "$split" \
-      --output "$FEATURES" --workers "$WORKERS"
+    if ! "$PY" -m tiny_voca.prepare --inputs "$AUDIO/$split.jsonl" --split "$split" \
+           --output "$FEATURES" --workers "$WORKERS" --resume; then
+      echo "  prepare $split could not resume; rebuilding $FEATURES"
+      rm -rf "$FEATURES"
+      "$PY" -m tiny_voca.prepare --inputs "$AUDIO/$split.jsonl" --split "$split" \
+        --output "$FEATURES" --workers "$WORKERS" || return 1
+    fi
   done
 }
+
+run_annotate() {
+  if ! "$PY" -m tiny_voca.annotate --features "$FEATURES" --output "$ANN" \
+         --dataset-revision "$RUN" --device cuda --resume; then
+    echo "  annotate could not resume; rebuilding $ANN"
+    rm -rf "$ANN"
+    "$PY" -m tiny_voca.annotate --features "$FEATURES" --output "$ANN" \
+      --dataset-revision "$RUN" --device cuda || return 1
+  fi
+}
 stage prepare     run_prepare
-stage annotate    "$PY" -m tiny_voca.annotate --features "$FEATURES" --output "$ANN" \
-                    --dataset-revision "$RUN" --device cuda
+stage annotate    run_annotate
 stage gate        "$PY" scripts/check_annotations.py --annotations "$ANN" --strict
 
 if [[ "$MODE" == "pilot" ]]; then

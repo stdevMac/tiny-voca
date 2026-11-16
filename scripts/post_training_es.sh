@@ -35,6 +35,16 @@ step "evaluating step $BEST with 20 samples per voice per split"
 "$PY" -m tiny_voca.evaluate --checkpoint "$BEST_CKPT" --annotations "$DATA/annotations-es" \
   --output "$OUT" --tag "$RUN-step$BEST" --device cuda --splits validation test --per-voice 20 --novel 10
 
+step "exporting the winner"
+# The pipeline exported the final checkpoint. If the comparison picked an
+# earlier one, that export is the wrong model, so the winner is exported here
+# and fetch_run.sh prefers these files.
+cp "$BEST_CKPT" "$OUT/inference-best.pt"
+"$PY" -m tiny_voca.export --checkpoint "$BEST_CKPT" --output "$OUT/tiny-voca-es-best.onnx"
+"$PY" -m tiny_voca.export --checkpoint "$BEST_CKPT" --output "$OUT/tiny-voca-es-best-exact.onnx" --external-noise
+"$PY" scripts/check_onnx.py --checkpoint "$BEST_CKPT" --onnx "$OUT/tiny-voca-es-best-exact.onnx" \
+  --release "$OUT/tiny-voca-es-best.onnx" --output "$OUT/onnx-check" --threads 4
+
 step "question intonation"
 "$PY" scripts/probe_intonation.py --report "$OUT/report.json" --audio-dir "$OUT/audio" \
   --output "$OUT/intonation.json" --limit 40

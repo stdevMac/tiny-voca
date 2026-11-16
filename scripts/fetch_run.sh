@@ -10,8 +10,12 @@
 #   ./scripts/fetch_run.sh --host root@203.57.40.129 --port 10151 \
 #       --key ~/.ssh/tiny-voca-es-run --run es-1 --output ~/tiny-voca-es-1
 #
-# Add --audio to also copy the 1.6 GB of teacher FLAC, or --features/--annotations
-# to copy the derived data (large; only needed to retrain without the teacher).
+# Add --audio to also copy the 2.4 GB of teacher FLAC, --annotations for the
+# alignment (65 MB, the split lists live here), or --checkpoints for the
+# numbered training checkpoints (1.2 GB). --all takes audio, annotations and
+# checkpoints, which is everything needed to rebuild the run without paying for
+# the teacher again; --features is left out because it rebuilds from the audio
+# in about ten minutes.
 set -euo pipefail
 
 HOST=${HOST:-}
@@ -23,6 +27,7 @@ REMOTE=${REMOTE:-/workspace/tiny-voca}
 WANT_AUDIO=0
 WANT_FEATURES=0
 WANT_ANNOTATIONS=0
+WANT_CHECKPOINTS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,7 +40,8 @@ while [[ $# -gt 0 ]]; do
     --audio) WANT_AUDIO=1; shift ;;
     --features) WANT_FEATURES=1; shift ;;
     --annotations) WANT_ANNOTATIONS=1; shift ;;
-    --all) WANT_AUDIO=1; WANT_FEATURES=1; WANT_ANNOTATIONS=1; shift ;;
+    --checkpoints) WANT_CHECKPOINTS=1; shift ;;
+    --all) WANT_AUDIO=1; WANT_ANNOTATIONS=1; WANT_CHECKPOINTS=1; shift ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -93,6 +99,15 @@ copy "data/audio-es/manifest.jsonl" "audio-es/manifest.jsonl"
 copy "data/audio-es/review.jsonl" "audio-es/review.jsonl"
 copy "data/audio-es/progress.json" "audio-es/progress.json"
 
+if [[ "$WANT_CHECKPOINTS" == 1 ]]; then
+  # The numbered checkpoints are what the ranking compares, and the one that was
+  # listened to is often not the one that ships. Keeping them means a later
+  # round can re-rank or branch without the teacher.
+  echo "== numbered checkpoints (large)"
+  for checkpoint in $("${SSH[@]}" "$HOST" "cd $REMOTE && ls data/runs/$RUN/step-*.pt 2>/dev/null"); do
+    copy "$checkpoint" "runs/$RUN/$(basename "$checkpoint")"
+  done
+fi
 if [[ "$WANT_AUDIO" == 1 ]]; then
   echo "== teacher audio (large)"
   copy "data/audio-es/audio" "audio-es/audio"
@@ -110,6 +125,25 @@ echo "== checksums"
 ( cd "$OUTPUT" && find . -type f ! -name SHA256SUMS -print0 | xargs -0 shasum -a 256 | sort -k2 > SHA256SUMS )
 echo "  $(wc -l < "$OUTPUT/SHA256SUMS" | tr -d ' ') files, $(du -sh "$OUTPUT" | cut -f1)"
 
+# A checksum of the local copy says nothing about the transfer. Every path in
+# the manifest mirrors the host under data/, so the host is asked for the same
+# hashes and the two lists are compared. A truncated scp is silent otherwise.
+echo "== verifying the copy against the host"
+( cd "$OUTPUT" && awk '{print $2}' SHA256SUMS | sed 's|^\./||' | sed 's|^|data/|' ) > "$OUTPUT/.remote-paths"
+"${SSH[@]}" "$HOST" "cd $REMOTE && while IFS= read -r p; do sha256sum \"\$p\"; done" \
+  < "$OUTPUT/.remote-paths" > "$OUTPUT/.remote-sums"
+( cd "$OUTPUT" && awk '{print $1, $2}' SHA256SUMS | sed 's| \./| |' | sort -k2 ) > "$OUTPUT/.local-sums"
+sed 's|  data/| |' "$OUTPUT/.remote-sums" | sort -k2 > "$OUTPUT/.remote-normalised"
+if diff -q "$OUTPUT/.local-sums" "$OUTPUT/.remote-normalised" > /dev/null; then
+  echo "  all $(wc -l < "$OUTPUT/.local-sums" | tr -d ' ') files match the host"
+else
+  echo "  MISMATCH — the local copy differs from the host:" >&2
+  diff "$OUTPUT/.local-sums" "$OUTPUT/.remote-normalised" | head -20 >&2
+  rm -f "$OUTPUT/.remote-paths" "$OUTPUT/.remote-sums" "$OUTPUT/.local-sums" "$OUTPUT/.remote-normalised"
+  exit 1
+fi
+rm -f "$OUTPUT/.remote-paths" "$OUTPUT/.remote-sums" "$OUTPUT/.local-sums" "$OUTPUT/.remote-normalised"
+
 # The weights are only useful with the front end that made them.
 echo "== verifying the checkpoint loads with this code"
 .venv/bin/python - "$OUTPUT/runs/$RUN/inference.pt" <<'PY'
@@ -117,7 +151,13 @@ import sys, torch
 sys.path.insert(0, "src")
 from tiny_voca.text import frontend_fingerprint
 state = torch.load(sys.argv[1], map_location="cpu", weights_only=True)
-if state.get("frontend") != frontend_fingerprint():
+# A training checkpoint stores the fingerprint as a string; an inference export
+# stores the whole identity dict with the fingerprint inside it. Both are the
+# same claim, so accept either rather than failing the fetch on the shape.
+frontend = state.get("frontend")
+if isinstance(frontend, dict):
+    frontend = frontend.get("fingerprint")
+if frontend != frontend_fingerprint():
     raise SystemExit("front end does not match: the checkpoint was made with different symbols")
 print(f"  step {state['step']}, {sum(v.numel() for v in state['model'].values())} parameters, front end matches")
 PY

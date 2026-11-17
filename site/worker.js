@@ -23,6 +23,21 @@ const PEAK = 0.99;
 
 let espeak, session, config;
 
+// fetch() rejects with a bare "Failed to fetch" when the network or CORS fails; name the file instead.
+async function get(url) {
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    throw new Error(`no se pudo descargar ${url} (${error.message}). ¿Hay conexión?`);
+  }
+  if (!response.ok) {
+    const missing = response.status === 401 || response.status === 404;
+    throw new Error(`${url}: ${response.status}${missing ? " (el archivo no existe o aún no está publicado)" : ""}`);
+  }
+  return response;
+}
+
 const status = (text, progress) => postMessage({ type: "status", text, progress });
 
 // Downloaded files are kept in the browser's cache storage: a second visit starts without the network.
@@ -40,8 +55,7 @@ async function download(url, label) {
 }
 
 async function fetchBytes(url, label) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${url}: ${response.status}`);
+  const response = await get(url);
   const total = Number(response.headers.get("content-length")) || 0;
   if (!response.body || !total) return new Uint8Array(await response.arrayBuffer());
   const reader = response.body.getReader();
@@ -61,14 +75,17 @@ async function fetchBytes(url, label) {
 }
 
 async function loadFrontEnd() {
-  espeak = await createEspeak(new URL("./espeak/", import.meta.url).href);
+  try {
+    espeak = await createEspeak(new URL("./espeak/", import.meta.url).href);
+  } catch (error) {
+    throw new Error(`no se pudo cargar eSpeak NG: ${error.message}`);
+  }
   if (espeak.version !== ESPEAK_VERSION) console.warn(`eSpeak NG ${espeak.version}, the model was trained with ${ESPEAK_VERSION}`);
   phonemize("Hola.", espeak.phonemize);  // warm up
 }
 
 async function loadModel(base) {
-  const response = await fetch(base + "tiny-voca-es.json");
-  if (!response.ok) throw new Error(`${base}tiny-voca-es.json: ${response.status}`);
+  const response = await get(base + "tiny-voca-es.json");
   config = await response.json();
   if (JSON.stringify(config.symbols) !== JSON.stringify(SYMBOLS)) throw new Error("the model's symbols differ from the front end's");
   const bytes = await download(base + "tiny-voca-es.onnx", "Descargando el modelo");

@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tiny-voca-es</title>
+<meta name="description" content="tiny-voca-es: un modelo de texto a voz en español de 4,5 millones de parámetros que funciona en tu navegador. A 4.5M-parameter Spanish text-to-speech model running in your browser.">
+<meta property="og:title" content="tiny-voca-es: voz en español en 21 MB">
+<meta property="og:description" content="Un modelo de texto a voz en español de 4,5 M de parámetros, entrenado desde cero. Funciona en tu navegador.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171512'/%3E%3Cpath d='M8 13v6M12 9v14M16 12v8M20 7v18M24 13v6' stroke='%23f4efe6' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://huggingface.co" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<style>
+  :root {
+    --paper: #f6f2ea; --ink: #1b1915; --muted: #6d665b; --line: #d9d2c4; --panel: #fffdf8;
+    --accent: #b4421f; --accent-ink: #fff; --ok: #2f6b3c;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #151412; --ink: #ece6da; --muted: #9a9284; --line: #35312a; --panel: #1d1b18; --accent: #e0703f; --accent-ink: #151412; --ok: #7fbf8c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.55 var(--ui); }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 16px 72px; }
+  header h1 { font: 600 44px/1.05 var(--serif); letter-spacing: -0.01em; margin: 0 0 14px; }
+  header h1 small { font-size: 0.5em; color: var(--muted); font-weight: 400; margin-left: 6px; }
+  header p { margin: 0; color: var(--muted); max-width: 58ch; }
+  header p strong { color: var(--ink); font-weight: 600; }
+  header .en { font-size: 14px; margin-top: 8px; }
+  h2 { font: 600 24px/1.2 var(--serif); margin: 52px 0 12px; }
+  .panel { margin-top: 32px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  textarea { width: 100%; min-height: 140px; resize: vertical; border: 0; outline: 0; background: transparent; color: inherit;
+             font: 20px/1.5 var(--serif); padding: 4px; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+  .examples button { font: 13px var(--ui); color: var(--muted); background: transparent; border: 1px solid var(--line);
+                     border-radius: 999px; padding: 5px 11px; cursor: pointer; }
+  .examples button:hover { color: var(--ink); border-color: var(--muted); }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+  .voices { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .voices label { padding: 7px 14px; font-size: 14px; cursor: pointer; color: var(--muted); }
+  .voices input { position: absolute; opacity: 0; pointer-events: none; }
+  .voices input:checked + span { color: var(--ink); font-weight: 600; }
+  .voices label:has(input:checked) { background: var(--paper); }
+  .voices label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .speed, .accent { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+  .speed input { width: 120px; accent-color: var(--accent); }
+  .speed output { font: 13px var(--mono); color: var(--ink); min-width: 4ch; }
+  .accent select { font: 14px var(--ui); color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+  #speak { margin-left: auto; min-width: 6.5em; font: 600 16px var(--ui); color: var(--accent-ink); background: var(--accent); border: 0;
+           border-radius: 10px; padding: 11px 22px; cursor: pointer; }
+  #speak:disabled { opacity: 0.45; cursor: default; }
+  #speak:focus-visible, textarea:focus-visible, .examples button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .status { margin-top: 16px; font-size: 14px; color: var(--muted); min-height: 22px; }
+  .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
+  .bar[hidden], .result[hidden] { display: none; }
+  .result { margin-top: 22px; }
+  audio { width: 100%; }
+  dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0 0; }
+  dl div { border-top: 1px solid var(--line); padding-top: 8px; }
+  dt { font-size: 12px; color: var(--muted); }
+  dd { margin: 2px 0 0; font: 15px var(--mono); }
+  details { margin-top: 16px; font-size: 14px; color: var(--muted); }
+  details pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.6 var(--mono); color: var(--ink); margin: 8px 0 0; }
+  .facts { margin-top: 44px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
+  .facts div { padding: 16px 12px 16px 0; border-bottom: 1px solid var(--line); }
+  .facts b { display: block; font: 600 22px var(--serif); }
+  .facts span { font-size: 13px; color: var(--muted); }
+  ol.how { padding-left: 1.2em; margin: 0; }
+  ol.how li { margin: 6px 0; }
+  pre.code { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto;
+             font: 13.5px/1.6 var(--mono); margin: 10px 0 0; }
+  p.note { color: var(--muted); font-size: 15px; }
+  a { color: var(--ink); text-underline-offset: 3px; }
+  footer { margin-top: 48px; font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 18px; }
+  footer nav a { margin-right: 16px; }
+  footer p { margin: 14px 0 0; max-width: 64ch; }
+  @media (max-width: 560px) {
+    header h1 { font-size: 34px; } main { padding-top: 36px; }
+    dl { grid-template-columns: repeat(2, 1fr); } .facts { grid-template-columns: repeat(2, 1fr); }
+    #speak { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>tiny-voca <small>español</small></h1>
+    <p>Un modelo de texto a voz en español de <strong>4,5 millones de parámetros</strong>, con dos voces, entrenado desde cero.
+       Esta página lo ejecuta en tu navegador: lo que escribes no sale de tu dispositivo.</p>
+    <p class="en" lang="en">A 4.5M-parameter Spanish text-to-speech model, trained from scratch. It runs here, in your browser.</p>
+  </header>
+
+  <section class="panel">
+    <textarea id="text" spellcheck="false" aria-label="Texto para leer">Hola, ¿cómo estás? Esto es tiny voca, una voz pequeña en español que funciona en tu navegador.</textarea>
+    <div class="examples" id="examples"></div>
+    <div class="controls">
+      <div class="voices" role="radiogroup" aria-label="Voz">
+        <label><input type="radio" name="voice" value="0" checked><span>F2</span></label>
+        <label><input type="radio" name="voice" value="1"><span>M2</span></label>
+      </div>
+      <label class="speed">Velocidad <input id="speed" type="range" min="0.7" max="1.4" step="0.05" value="1"><output id="speed-value">1,00</output></label>
+      <label class="accent">Acento
+        <select id="accent">
+          <option value="es-ES" selected>España</option>
+          <option value="es-AR">Rioplatense (sheísmo)</option>
+          <option value="es-CU">Caribe (cubano)</option>
+        </select>
+      </label>
+      <button id="speak" disabled>Hablar</button>
+    </div>
+  </section>
+
+  <div class="status" id="status" role="status">Cargando…</div>
+  <div class="bar" id="bar"><i></i></div>
+
+  <section class="result" id="result" hidden>
+    <audio id="audio" controls></audio>
+    <dl>
+      <div><dt>Audio</dt><dd id="m-audio">–</dd></div>
+      <div><dt>Tiempo de generación</dt><dd id="m-time">–</dd></div>
+      <div><dt>Velocidad</dt><dd id="m-speed">–</dd></div>
+      <div><dt>Texto a fonemas</dt><dd id="m-phonemes">–</dd></div>
+    </dl>
+    <details><summary>Fonemas</summary><pre id="phonemes"></pre></details>
+  </section>
+
+  <section class="facts">
+    <div><b>4.534.411</b><span>parámetros, generador de onda incluido</span></div>
+    <div><b>21 MB</b><span>archivo del modelo (ONNX, float32)</span></div>
+    <div><b>24 kHz</b><span>audio mono</span></div>
+    <div><b>2 voces</b><span>F2 y M2, castellano</span></div>
+    <div><b>22,7 horas</b><span>de voz sintética de entrenamiento</span></div>
+    <div><b>Apache-2.0</b><span>código y pesos</span></div>
+  </section>
+
+  <h2>Cómo funciona</h2>
+  <ol class="how">
+    <li><a href="https://github.com/espeak-ng/espeak-ng">eSpeak NG</a> 1.52.0, compilado a WebAssembly, convierte el texto en fonemas.</li>
+    <li>Un pequeño codificador predice la duración, el tono y la energía de cada fonema.</li>
+    <li>Un generador de onda de fuente y filtro produce el audio: pulsos armónicos con ruido por encima del segundo y del 33.º armónico.</li>
+    <li><a href="https://onnxruntime.ai/">ONNX Runtime Web</a> ejecuta el modelo en tu procesador, frase a frase, y el audio empieza a sonar con la primera.</li>
+  </ol>
+  <p class="note">La primera visita descarga unos 23 MB (el modelo desde Hugging Face y eSpeak NG); las siguientes arrancan sin red.
+     Las palabras extranjeras y los nombres poco comunes a menudo se pronuncian mal. Los acentos rioplatense y caribeño
+     cambian solo los fonemas: las voces se entrenaron en castellano.</p>
+
+  <h2>Úsalo en tu equipo</h2>
+  <pre class="code">git clone https://github.com/stdevMac/tiny-voca
+cd tiny-voca
+./run-es.sh        # instala, descarga el modelo y abre http://127.0.0.1:8000</pre>
+  <p class="note">Necesita Python 3.10+ y <code>espeak-ng</code> 1.52.0 (macOS: <code>brew install espeak-ng</code>).
+     El modelo, el entrenamiento y los datos están documentados en el
+     <a href="https://github.com/stdevMac/tiny-voca#readme">repositorio</a>.</p>
+
+  <footer>
+    <nav>
+      <a href="https://github.com/stdevMac/tiny-voca">Código</a>
+      <a href="https://huggingface.co/marcosmaceo/tiny-voca-es">Modelo</a>
+      <a href="https://huggingface.co/datasets/marcosmaceo/tiny-voca-es">Datos</a>
+      <a href="https://github.com/n4ze3m/tiny-voca">tiny-voca (inglés)</a>
+    </nav>
+    <p>Una versión en español de <a href="https://github.com/n4ze3m/tiny-voca">tiny-voca</a>, de Muhammed Nazeem: la arquitectura,
+       la receta de entrenamiento y el generador de onda son suyos. eSpeak NG se distribuye bajo GPL-3.0.</p>
+  </footer>
+</main>
+
+<script src="player.js"></script>
+<script>
+// The model is fetched from Hugging Face at a fixed revision; ?model=<base URL> loads another copy (a local one for tests).
+const MODEL = new URLSearchParams(location.search).get("model")
+  || "https://huggingface.co/marcosmaceo/tiny-voca-es/resolve/main/";
+const EXAMPLES = [
+  ["Saludo", "Hola, ¿cómo estás? Esto es tiny voca, una voz pequeña en español que funciona en tu navegador."],
+  ["Números", "La reunión pasó a las 15:30 del 14 de marzo, así que quedan unos 45 minutos. Cuesta 12,99 euros."],
+  ["Pregunta", "¿De verdad pensabas que me iba a olvidar de tu cumpleaños? ¡Claro que no!"],
+  ["Cuento", "Nunca había visto el mar, y durante un largo rato se quedó en la orilla sin decir una palabra."],
+  ["Trabalenguas", "Tres tristes tigres tragaban trigo en un trigal. El perro de San Roque no tiene rabo."],
+];
+const $ = (id) => document.getElementById(id);
+const worker = new Worker("worker.js", { type: "module" });
+let ready = false, busy = false, request = 0, url = null, rate = 0, live = null;
+const decimal = (value, digits) => value.toFixed(digits).replace(".", ",");
+
+for (const [label, text] of EXAMPLES) {
+  const button = document.createElement("button");
+  button.textContent = label;
+  button.onclick = () => { $("text").value = text; $("text").focus(); update(); };
+  $("examples").append(button);
+}
+$("speed").oninput = () => { $("speed-value").textContent = decimal(Number($("speed").value), 2); };
+
+function setStatus(text, progress) {
+  $("status").textContent = text;
+  $("bar").hidden = progress == null;
+  if (progress != null) $("bar").firstElementChild.style.width = Math.round(progress * 100) + "%";
+}
+// While the sentences are playing, the button stops them.
+function update() {
+  const playing = live !== null && live.playing;
+  $("speak").textContent = playing ? "Parar" : "Hablar";
+  $("speak").disabled = !playing && (!ready || busy || !$("text").value.trim());
+}
+$("text").oninput = update;
+
+function wav(samples, rate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const text = (offset, value) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+  text(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); text(8, "WAVEfmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  text(36, "data"); view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, samples[i])) * 32767, true);
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+worker.onmessage = ({ data }) => {
+  if (data.type === "status") setStatus(data.text, data.progress);
+  else if (data.type === "ready") { ready = true; rate = data.sampleRate; setStatus("Listo."); update(); }
+  else if (data.type === "sentence" && data.id === request) {
+    if (live && data.audio) live.add(data.audio, data.sampleRate);
+    setStatus(`Leyendo la frase ${data.index + 1} de ${data.total}`, (data.index + 1) / data.total);
+  } else if (data.type === "done" && data.id === request) {
+    busy = false; update();
+    const seconds = data.audio.length / data.sampleRate;
+    if (url) URL.revokeObjectURL(url);
+    url = URL.createObjectURL(wav(data.audio, data.sampleRate));
+    $("audio").src = url;
+    // The sentences have been playing since the first one was made, so the whole clip only waits in the player.
+    // Where they could not be heard, it plays now.
+    if (!live || !live.end()) $("audio").play().catch(() => {});
+    $("m-audio").textContent = decimal(seconds, 1) + " s";
+    $("m-time").textContent = decimal(data.totalTime / 1000, 2) + " s";
+    $("m-speed").textContent = decimal(seconds / (data.totalTime / 1000), 1) + "× tiempo real";
+    $("m-phonemes").textContent = Math.round(data.phonemeTime) + " ms";
+    $("phonemes").textContent = data.phonemes.join("\n");
+    $("result").hidden = false;
+    setStatus("Hecho.");
+    document.body.dataset.done = String(request);
+  } else if (data.type === "error") {
+    busy = false;
+    if (live) live.end();
+    update();
+    setStatus(data.plain ? data.message : "Algo falló: " + data.message);
+  }
+};
+worker.onerror = (event) => setStatus("No se pudo iniciar: " + (event.message || "este navegador no admite workers de módulo"));
+
+// Sound has to start inside a click, so the player is made here and not when the first sentence arrives.
+function listen() {
+  const Context = window.AudioContext || window.webkitAudioContext;
+  if (!live && Context) {
+    let context = null;
+    try { context = new Context({ sampleRate: rate }); } catch (error) { try { context = new Context(); } catch (failed) {} }
+    if (context) live = livePlayer(context, update);
+  }
+  $("audio").pause();
+  if (live) live.begin();
+}
+$("audio").onplay = () => { if (live) live.stop(); };
+
+$("speak").onclick = () => {
+  if (live && live.playing) { live.stop(); return; }
+  busy = true;
+  request += 1;
+  listen();
+  update();
+  setStatus("Leyendo…", 0);
+  worker.postMessage({ type: "speak", id: request, text: $("text").value, accent: $("accent").value,
+                       voice: Number(document.querySelector("input[name=voice]:checked").value), speed: Number($("speed").value) });
+};
+$("text").addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !$("speak").disabled) $("speak").click();
+});
+
+// The model starts downloading as the page opens, so it is ready by the time the first sentence is typed.
+setStatus("Descargando el modelo y el fonetizador…", 0);
+worker.postMessage({ type: "load", model: MODEL });
+</script>
+</body>
+</html>

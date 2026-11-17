@@ -65,6 +65,16 @@
   dd { margin: 2px 0 0; font: 15px var(--mono); }
   details { margin-top: 16px; font-size: 14px; color: var(--muted); }
   details pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.6 var(--mono); color: var(--ink); margin: 8px 0 0; }
+  .takes { margin-top: 22px; }
+  .takes h3 { font: 600 14px var(--ui); color: var(--muted); margin: 0 0 4px; }
+  .takes ol { list-style: none; padding: 0; margin: 0; }
+  .takes li { border-top: 1px solid var(--line); padding: 10px 0; }
+  .takes .label { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; font-size: 14px; }
+  .takes .label b { font: 600 13px var(--mono); }
+  .takes .label q { color: var(--muted); flex: 1 1 12em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .takes .label a { font-size: 13px; }
+  .takes audio { height: 36px; margin-top: 6px; }
+  .takes[hidden] { display: none; }
   .facts { margin-top: 44px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
   .facts div { padding: 16px 12px 16px 0; border-bottom: 1px solid var(--line); }
   .facts b { display: block; font: 600 22px var(--serif); }
@@ -126,6 +136,11 @@
       <div><dt>Texto a fonemas</dt><dd id="m-phonemes">–</dd></div>
     </dl>
     <details><summary>Fonemas</summary><pre id="phonemes"></pre></details>
+  </section>
+
+  <section class="takes" id="takes" hidden aria-label="Tomas">
+    <h3>Tomas <span lang="en">· takes</span></h3>
+    <ol id="take-list"></ol>
   </section>
 
   <section class="facts">
@@ -192,7 +207,11 @@ const EXAMPLES = [
 ];
 const $ = (id) => document.getElementById(id);
 const worker = new Worker("worker.js", { type: "module" });
-let ready = false, busy = false, request = 0, url = null, rate = 0, live = null;
+let ready = false, busy = false, request = 0, rate = 0, live = null;
+// Every clip is kept as a take, newest first, so the same text can be compared across voices and speeds.
+// The oldest are dropped past TAKES, and their audio freed.
+const TAKES = 12;
+const asked = new Map();  // request id -> the settings it was made with
 const decimal = (value, digits) => value.toFixed(digits).replace(".", ",");
 
 for (const [label, text] of EXAMPLES) {
@@ -237,9 +256,10 @@ worker.onmessage = ({ data }) => {
   } else if (data.type === "done" && data.id === request) {
     busy = false; update();
     const seconds = data.audio.length / data.sampleRate;
-    if (url) URL.revokeObjectURL(url);
-    url = URL.createObjectURL(wav(data.audio, data.sampleRate));
+    const url = URL.createObjectURL(wav(data.audio, data.sampleRate));
     $("audio").src = url;
+    addTake(asked.get(data.id), url, seconds);
+    asked.delete(data.id);
     // The sentences have been playing since the first one was made, so the whole clip only waits in the player.
     // Where they could not be heard, it plays now.
     if (!live || !live.end()) $("audio").play().catch(() => {});
@@ -260,6 +280,42 @@ worker.onmessage = ({ data }) => {
 };
 worker.onerror = (event) => setStatus("No se pudo iniciar: " + (event.message || "este navegador no admite workers de módulo"));
 
+function addTake(settings, url, seconds) {
+  const item = document.createElement("li");
+  const label = document.createElement("div");
+  label.className = "label";
+  const name = document.createElement("b");
+  name.textContent = `${settings.voiceName} · ${decimal(settings.speed, 2)}× · ${settings.accentName}`;
+  const text = document.createElement("q");
+  text.textContent = settings.text;
+  text.title = settings.text;
+  const length = document.createElement("span");
+  length.textContent = decimal(seconds, 1) + " s";
+  const save = document.createElement("a");
+  save.href = url;
+  save.download = `tiny-voca-${settings.voiceName}-${settings.speed.toFixed(2)}-${settings.accent}-${$("take-list").children.length + 1}.wav`;
+  save.textContent = "Descargar";
+  label.append(name, text, length, save);
+  const player = document.createElement("audio");
+  player.controls = true;
+  player.preload = "none";
+  player.src = url;
+  item.dataset.url = url;
+  item.append(label, player);
+  $("take-list").prepend(item);
+  while ($("take-list").children.length > TAKES) {
+    const old = $("take-list").lastElementChild;
+    if ($("audio").src !== old.dataset.url) URL.revokeObjectURL(old.dataset.url);
+    old.remove();
+  }
+  $("takes").hidden = false;
+}
+// One sound at a time: starting any player pauses the others and the sentences still playing.
+document.addEventListener("play", (event) => {
+  for (const other of document.querySelectorAll("audio")) if (other !== event.target) other.pause();
+  if (live) live.stop();
+}, true);
+
 // Sound has to start inside a click, so the player is made here and not when the first sentence arrives.
 function listen() {
   const Context = window.AudioContext || window.webkitAudioContext;
@@ -271,7 +327,6 @@ function listen() {
   $("audio").pause();
   if (live) live.begin();
 }
-$("audio").onplay = () => { if (live) live.stop(); };
 
 $("speak").onclick = () => {
   if (live && live.playing) { live.stop(); return; }
@@ -280,8 +335,11 @@ $("speak").onclick = () => {
   listen();
   update();
   setStatus("Leyendo…", 0);
-  worker.postMessage({ type: "speak", id: request, text: $("text").value, accent: $("accent").value,
-                       voice: Number(document.querySelector("input[name=voice]:checked").value), speed: Number($("speed").value) });
+  const choice = document.querySelector("input[name=voice]:checked");
+  const settings = { text: $("text").value.trim(), accent: $("accent").value, voice: Number(choice.value), speed: Number($("speed").value),
+                     voiceName: choice.nextElementSibling.textContent, accentName: $("accent").selectedOptions[0].textContent.replace(/ \(.*\)$/, "") };
+  asked.set(request, settings);
+  worker.postMessage({ type: "speak", id: request, text: $("text").value, accent: settings.accent, voice: settings.voice, speed: settings.speed });
 };
 $("text").addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !$("speak").disabled) $("speak").click();

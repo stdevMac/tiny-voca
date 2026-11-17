@@ -4,7 +4,7 @@ Two folders are staged under ``~/tiny-voca-artifacts/release-es-1/``:
 
     hf-model/     README.md (the model card), tiny-voca-es.pt/.onnx/.json,
                   samples/*.wav, SHA256SUMS
-    hf-dataset/   README.md (the dataset card), LICENSE.md, data/<split>/*.flac
+    hf-dataset/   README.md (the dataset card), LICENSE.md, data/<split>/<voice>/*.flac
                   and metadata.jsonl, annotations/, voices/, text/,
                   generation/, SHA256SUMS
 
@@ -48,6 +48,7 @@ TARGETS = (
     ("dataset", "dataset", DATASET_REPO, "hf-dataset", f"https://huggingface.co/datasets/{DATASET_REPO}"),
 )
 SKIP = {".cache", ".DS_Store"}
+HUB_FOLDER_LIMIT = 10_000
 CARD_HASH = re.compile(r"`([^`\s]+)`: `([0-9a-f]{64})`")
 
 
@@ -112,6 +113,24 @@ def verify_card(folder):
     return problems
 
 
+def crowded(folder, files):
+    """The Hub rejects a commit that leaves more than 10,000 files in one folder.
+
+    upload_large_folder does not stop on that error: it retries forever, so check it here.
+    """
+    per_folder = {}
+    for path in files:
+        per_folder[path.parent] = per_folder.get(path.parent, 0) + 1
+    return [f"{folder.name}: {count} files in {parent.as_posix()}/, the Hub allows {HUB_FOLDER_LIMIT}"
+            for parent, count in sorted(per_folder.items()) if count > HUB_FOLDER_LIMIT]
+
+
+def missing_on_hub(api, repo, kind, folder, files):
+    """Staged files the Hub does not have after the upload."""
+    remote = set(api.list_repo_files(repo, repo_type=kind))
+    return [path.as_posix() for path in files if path.as_posix() not in remote]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--yes", action="store_true", help="Really create the repositories and upload (default: dry run)")
@@ -144,7 +163,7 @@ def main():
             for path in files:
                 print(f"      {str(path):<28} {size((folder / path).stat().st_size):>10}")
         print("  verifying SHA256SUMS ...", flush=True)
-        found = verify(folder) + verify_card(folder)
+        found = verify(folder) + verify_card(folder) + crowded(folder, files)
         print("  " + ("checksums and card hashes OK" if not found else f"{len(found)} problem(s)"))
         problems += found
 
@@ -180,7 +199,11 @@ def main():
         else:
             upload_large_folder(repo_id=repo, repo_type=kind, folder_path=folder,
                                 ignore_patterns=[".cache/**", ".DS_Store"])
-        print(f"done: {url}")
+        absent = missing_on_hub(HfApi(), repo, kind, folder, staged_files(folder))
+        if absent:
+            print(f"{label}: {len(absent)} staged files are not on the Hub, for example {absent[:3]}", file=sys.stderr)
+            return 1
+        print(f"done: {url} (every staged file is on the Hub)")
     return 0
 
 

@@ -75,12 +75,12 @@ Repository layout:
 
 | Path | Contents |
 |---|---|
-| `data/<split>/<id>.flac` | The accepted clips |
+| `data/<split>/<voice>/<id>.flac` | The accepted clips, one folder per voice (F2, M2) |
 | `data/<split>/metadata.jsonl` | One row per clip, the columns below |
 | `annotations/` | Phoneme tokens and durations, see [Annotations](#annotations) |
 | `text/scripts-full.jsonl` | All 11,050 requested sentences, with source and split |
 | `voices/` | `voices.json` (the voice descriptions, texts and seeds), `es-ES.json` (the same descriptions as used by the code), `references/F2.wav` and `M2.wav` (the voice prompts) |
-| `generation/manifest.jsonl` | The generator's full record for the accepted clips (its `audio` paths are relative to the generator's output folder; use `data/<split>/<id>.flac` here) |
+| `generation/manifest.jsonl` | The generator's full record for the accepted clips (its `audio` paths are relative to the generator's output folder; use `data/<split>/<voice>/<id>.flac` here) |
 | `generation/review.jsonl` | The 1,310 clips that failed screening twice; their audio is not included |
 | `generation/progress.json`, `generation/provenance.txt` | End state of the generation run; software versions and front-end fingerprint of the host that made the data |
 | `SHA256SUMS` | Checksums of every file in this repository except this README |
@@ -126,7 +126,7 @@ the corpus has not been checked by listeners clip by clip.
 
 | Column | Description |
 |---|---|
-| `file_name` | Path of the clip in the split folder |
+| `file_name` | Path of the clip in the split folder, `<voice>/<id>.flac` |
 | `id` | Clip ID, `<text_id>_<voice_id>` |
 | `text_id`, `voice_id` | Sentence and voice (`F2` or `M2`) |
 | `text` | The sentence that was read |

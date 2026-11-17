@@ -13,7 +13,7 @@ from tiny_voca.data import collate
 from tiny_voca.infer import load_model
 from tiny_voca.inspect import parameter_report
 from tiny_voca.losses import Discriminators
-from tiny_voca.model import SourceFilter, TinyVoca, cepstrum_response, filtered, pulse_train
+from tiny_voca.model import NOISE_ABOVE, SourceFilter, TinyVoca, cepstrum_response, filtered, harmonic_phases, pulse_train
 from tiny_voca.train import (WEIGHTS, TrainingSystem, atomic_save, export_model, learning_rate, load_compatible, optimize_step,
                              teacher_probability)
 from helpers import SYMBOLS, sample, small_config, write_annotations
@@ -55,6 +55,30 @@ class ModelTests(unittest.TestCase):
         self.assertLess(float(glide.abs().max()), 40)
         shifted = pulse_train(torch.full((1, 20), 150.0), rate, hop, phase=torch.tensor([1.0]))
         self.assertFalse(torch.allclose(shifted, pulse_train(torch.full((1, 20), 150.0), rate, hop)))
+
+    def test_harmonic_phases_move_the_shape_of_the_period_and_nothing_else(self):
+        rate, hop = 24000, 256
+        glide = torch.cat((torch.linspace(70, 140, 60), torch.linspace(140, 300, 60)))[None]
+        count = int(0.47 * rate / 70) + 2
+        # No offsets: the harmonics summed one by one are the closed form.
+        self.assertTrue(torch.allclose(pulse_train(glide, rate, hop, harmonic_phase=torch.zeros(count)), pulse_train(glide, rate, hop), atol=2e-5))
+        # A phase linear in the harmonic number is the same pulse train, later.
+        late = pulse_train(glide, rate, hop, harmonic_phase=harmonic_phases(count, beta=0.7, power=1.0))
+        self.assertTrue(torch.allclose(late, pulse_train(glide, rate, hop, phase=torch.tensor([-0.7])), atol=2e-5))
+        # Curved or scattered phases keep every harmonic's magnitude and the power,
+        # and take the peak out of the period. 96 Hz is 250 samples a period.
+        steady = torch.full((1, 250), 96.0)
+        pulses = pulse_train(steady, rate, hop)[0, 16000:48000].double()
+        partials = int(0.47 * rate / 96)
+        for offsets in (harmonic_phases(count, beta=math.pi / partials), harmonic_phases(count, beta=0.7, power=1.5),
+                        harmonic_phases(count, scatter=1.0, seed=3)):
+            spread = pulse_train(steady, rate, hop, harmonic_phase=offsets)[0, 16000:48000].double()
+            self.assertTrue(torch.allclose(torch.fft.rfft(spread).abs(), torch.fft.rfft(pulses).abs(), atol=1e-2))
+            self.assertAlmostEqual(float(spread.square().mean()), float(pulses.square().mean()), delta=1e-4)
+            self.assertLess(float(spread.abs().max()), 0.4 * float(pulses.abs().max()))
+        self.assertFalse(torch.equal(harmonic_phases(count, scatter=1.0, seed=3), harmonic_phases(count, scatter=1.0, seed=4)))
+        with self.assertRaises(ValueError):
+            pulse_train(steady, rate, hop, harmonic_phase=torch.zeros(8))
 
     def test_stft_filtering_is_transparent_for_a_flat_response(self):
         source = torch.randn(2, 4096)
@@ -136,6 +160,71 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(hidden.grad).all())
         self.assertGreater(float(hidden.grad[1, :7].abs().sum()), 0)
         self.assertEqual(float(hidden.grad[1, 7:].abs().sum()), 0.0)        # padded frames cannot influence audio
+
+    def test_noise_excitation_keeps_the_spectrum_and_loses_the_pitch(self):
+        c = small_config()
+        head = SourceFilter(c)
+        with torch.no_grad():
+            head.harmonic.bias[1:4] = torch.tensor([1.0, -0.6, 0.4])        # a sloping envelope, so the filter matters
+        frames, period = 300, 240                                           # 100 Hz
+        hidden, pitch, silence = torch.zeros(1, frames, c.channels), torch.full((1, frames), 100.0), torch.zeros(1, frames * c.hop)
+        breath = torch.randn(1, frames * c.hop, generator=torch.Generator().manual_seed(1))
+
+        def render(cutoff=None, length=frames, **options):                  # the harmonic branch alone
+            with torch.no_grad():
+                return head(hidden, pitch, torch.tensor([length]), noise=silence, noise_above=cutoff, breath=breath, **options)
+        pulses = render()
+        # A cut-off no frequency reaches leaves the pulse train alone.
+        self.assertTrue(torch.allclose(render(torch.full((1, frames), math.inf)), pulses, atol=1e-7))
+        hiss = render(torch.zeros(1, frames))
+
+        def bands(wave):       # power per kHz, from 1 to 11
+            power = torch.stft(wave[0], 2048, 512, window=torch.hann_window(2048), return_complex=True).abs().square().mean(1)
+            return power[86:].unfold(0, 85, 85).sum(1)[:10]
+        self.assertLess(float((10 * torch.log10(bands(hiss) / bands(pulses))).abs().max()), 0.5)
+        self.assertAlmostEqual(float(hiss.square().mean() / pulses.square().mean()), 1.0, delta=0.05)
+
+        def repeats(wave):     # correlation of each period with the next
+            body = wave[0, 4 * period:-4 * period]
+            return float(torch.corrcoef(torch.stack((body[:-period], body[period:])))[0, 1])
+        self.assertGreater(repeats(pulses), 0.99)
+        self.assertLess(abs(repeats(hiss)), 0.2)
+        # Noise above the twentieth harmonic, 2 kHz, in the first half only: the
+        # second half is the pulse train, and so is the first below the cut-off.
+        middle = frames // 2 * c.hop
+        mixed = render(torch.cat((torch.full((1, frames // 2), 20.0), torch.full((1, frames - frames // 2), math.inf)), dim=1))
+        self.assertTrue(torch.allclose(mixed[:, middle + 4 * c.hop:], pulses[:, middle + 4 * c.hop:], atol=1e-6))
+        self.assertLess(float((10 * torch.log10(bands(mixed[:, :middle]) / bands(pulses[:, :middle]))).abs().max()), 0.7)
+        low, reference = (torch.stft(wave[0, :middle], 2048, 512, window=torch.hann_window(2048), return_complex=True)[:100]      # below 1.2 kHz
+                          for wave in (mixed, pulses))
+        self.assertTrue(torch.allclose(low, reference, atol=0.02 * float(reference.abs().max())))
+        # The noise that replaces pulses belongs to the harmonic branch, and it respects lengths.
+        self.assertEqual(float(render(torch.zeros(1, frames), variant="noise_only").abs().max()), 0.0)
+        self.assertEqual(float(render(torch.zeros(1, frames), length=100)[0, 100 * c.hop:].abs().max()), 0.0)
+
+    def test_noise_excitation_is_the_default_and_can_be_switched_off(self):
+        torch.manual_seed(0)
+        model = TinyVoca(small_config()).eval()
+        with torch.no_grad():
+            model.vocoder.harmonic.weight.normal_(std=0.05)
+        tokens = torch.tensor([[1, 20, 50, 27, 51, 2]])
+        inputs = (tokens, torch.zeros_like(tokens), torch.tensor([6]), torch.tensor([0]))
+        with torch.no_grad():
+            plain, lengths, _ = model.synthesize(*inputs, noise_above=None)         # what the weights were trained with
+            default, _, _ = model.synthesize(*inputs)
+            named, _, _ = model.synthesize(*inputs, noise_above=NOISE_ABOVE)
+            same, _, _ = model.synthesize(*inputs, noise_above=(math.inf, math.inf))
+            changed, _, _ = model.synthesize(*inputs, noise_above=(0.0, 0.0))
+            again, _, _ = model.synthesize(*inputs, noise_above=(0.0, 0.0))
+        self.assertTrue(torch.equal(default, named))
+        if NOISE_ABOVE is None:                                             # English: pulses alone, as shipped
+            self.assertTrue(torch.equal(default, plain))
+        else:
+            self.assertEqual(NOISE_ABOVE, (2.0, 33.0))
+            self.assertFalse(torch.allclose(default, plain, atol=1e-4))
+        self.assertTrue(torch.allclose(same, plain, atol=1e-7))
+        self.assertFalse(torch.allclose(changed, plain, atol=1e-4))
+        self.assertTrue(torch.equal(changed, again))                        # seeded like the rest
 
     def test_both_training_phases_update_every_inference_module(self):
         c = small_config()

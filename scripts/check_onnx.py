@@ -20,6 +20,7 @@ import torch
 
 from tiny_voca.export import Exportable
 from tiny_voca.infer import load_model, match_frontend
+from tiny_voca.model import NOISE_ABOVE
 from tiny_voca.text import phonemize
 
 SENTENCES = (
@@ -55,8 +56,11 @@ def main():
     torch.set_num_threads(args.threads)
     match_frontend(args.checkpoint)
     model = load_model(args.checkpoint, "cpu")
-    wrapper = Exportable(model, external_noise=True).eval()
     exact = session(args.onnx, args.threads)
+    # An export made with --pulses-only has no ``breath`` input; compare it with pulses alone.
+    names = [name for name in ("noise", "breath") if name in {value.name for value in exact.get_inputs()}]
+    noise_above = NOISE_ABOVE if "breath" in names else None
+    wrapper = Exportable(model, external_noise=True, noise_above=noise_above).eval()
     args.output.mkdir(parents=True, exist_ok=True)
     rate, hop = model.config.sample_rate, model.config.hop
     rows = []
@@ -64,16 +68,20 @@ def main():
         phones = phonemize(text)
         for voice, name in enumerate(model.config.speakers):
             tokens, stress = torch.tensor([phones.ids]), torch.tensor([phones.stress])
-            reference, lengths, details = model.synthesize(tokens, stress, torch.tensor([len(phones)]), torch.tensor([voice]))
+            reference, lengths, details = model.synthesize(tokens, stress, torch.tensor([len(phones)]), torch.tensor([voice]),
+                                                           noise_above=noise_above)
             reference = reference[0, :int(lengths[0])].numpy()
-            noise = torch.randn(len(reference), generator=torch.Generator().manual_seed(0))[None]
+            # What synthesize draws for one utterance: the noise branch's signal, then the harmonic branch's noise.
+            stream = torch.Generator().manual_seed(0)
+            draws = [torch.randn(len(reference), generator=stream)[None] for _ in names]
             one = lambda value: torch.tensor([value])
             with torch.no_grad():
-                rewritten, durations = wrapper(tokens, stress, torch.tensor([voice]), one(1.0), one(0.0), one(1.0), noise)
+                rewritten, durations = wrapper(tokens, stress, torch.tensor([voice]), one(1.0), one(0.0), one(1.0), *draws)
             feed = feeds(phones, voice)
-            padded = np.zeros((1, hop * model.config.max_frames), dtype=np.float32)
-            padded[0, :noise.shape[1]] = noise[0].numpy()
-            exported, exported_durations = exact.run(None, {**feed, "noise": padded})
+            for name, draw in zip(names, draws):
+                feed[name] = np.zeros((1, hop * model.config.max_frames), dtype=np.float32)
+                feed[name][0, :draw.shape[1]] = draw[0].numpy()
+            exported, exported_durations = exact.run(None, feed)
             peak = float(np.abs(reference).max())
             rows.append({"sentence": number, "voice": name, "tokens": len(phones), "seconds": round(len(reference) / rate, 2),
                          "same_durations": bool((exported_durations == details["durations"].numpy()).all()),

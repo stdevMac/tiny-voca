@@ -21,7 +21,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from .config import Config
-from .text import PHONE_IDS, SYMBOL_TO_ID, VOWELS
+from .text import LANGUAGE, PHONE_IDS, SYMBOL_TO_ID, VOWELS
 
 
 class UtteranceTooLong(ValueError):
@@ -115,13 +115,44 @@ class Predictor(nn.Module):
         return self.out(x) * mask[..., None]
 
 
-def pulse_train(f0, sample_rate, hop, limit=0.47, phase=None):
+def harmonic_phases(count, beta=0.0, scatter=0.0, seed=0, power=2.0):
+    """Phase offsets [count] for harmonics 1..count, for ``pulse_train``.
+
+    A pulse train has every harmonic at phase zero, so each period's energy sits
+    in one instant. ``-beta * k**2`` bends the phase: harmonic k is delayed by
+    ``beta * k / pi`` of a period and the pulse becomes a sweep. With K harmonics,
+    ``beta = pi / K`` spreads it over exactly one period (Schroeder's low-peak
+    phases); a negative beta sweeps the other way. A term linear in k would do
+    nothing: ``cos(k*x - b*k)`` is ``cos(k*(x - b))``, the same pulse later.
+
+    ``power`` is the exponent in ``-beta * k**power``, and the delay of harmonic
+    k is ``beta * power * k**(power - 1) / (2 * pi)`` of a period. At 2 the delay
+    grows by the same amount per harmonic, so nearly all of the spread lands on
+    the high ones; nearer 1 it grows by the same amount per octave, which is how
+    the ear's own bands are spaced.
+
+    ``scatter`` adds a fixed pseudo-random offset within ``±scatter * pi`` to
+    each harmonic, the same in every period of the utterance."""
+    k = torch.arange(1, count + 1, dtype=torch.float64)
+    offsets = -beta * k ** power
+    if scatter:
+        generator = torch.Generator().manual_seed(seed + 104729)
+        offsets = offsets + scatter * math.pi * (2 * torch.rand(count, generator=generator, dtype=torch.float64) - 1)
+    return offsets
+
+
+def pulse_train(f0, sample_rate, hop, limit=0.47, phase=None, harmonic_phase=None):
     """Band-limited pulse train [B, T*hop] with unit power for f0 [B, T] in Hz.
 
     Frame values sit at samples i*hop and are interpolated in the log domain.
     The sum of all harmonics below ``limit * sample_rate`` has the closed form
     sin((K+1/2)x) / (2 sin(x/2)) - 1/2; the top harmonic fades in and out so the
     signal stays continuous while the pitch glides. Float64 keeps the phase exact.
+
+    ``harmonic_phase`` [K] or [B, K] gives harmonic k its own phase offset (see
+    ``harmonic_phases``). The harmonics are then summed one by one with the same
+    amplitudes as the closed form, so the magnitude spectrum is unchanged and
+    only the shape of the period moves. None keeps the closed form.
     """
     frames = f0.shape[1]
     knots = torch.log(f0.double().clamp_min(1.0))
@@ -136,6 +167,17 @@ def pulse_train(f0, sample_rate, hop, limit=0.47, phase=None):
     theta = torch.remainder(theta, 2 * math.pi)
     harmonics = (limit * sample_rate / frequency).clamp_min(1.0)
     whole = torch.floor(harmonics)
+    if harmonic_phase is not None:
+        count = int(whole.max()) + 1
+        offsets = harmonic_phase.to(theta)
+        if offsets.shape[-1] < count:
+            raise ValueError(f"harmonic_phase covers {offsets.shape[-1]} harmonics and this pitch needs {count}")
+        wave = torch.zeros_like(theta)
+        for k in range(1, count + 1):
+            # Harmonic k is whole while it is under the limit and fades as it
+            # crosses it: the closed form's amplitudes, written out.
+            wave = wave + (harmonics - (k - 1)).clamp(0.0, 1.0) * torch.cos(k * theta + offsets[..., k - 1:k])
+        return (wave * torch.sqrt(2.0 / harmonics)).float()
     denominator = 2 * torch.sin(theta / 2)
     tiny = denominator.abs() < 1e-7
     core = torch.where(tiny, whole, torch.sin((whole + 0.5) * theta) / torch.where(tiny, torch.ones_like(denominator), denominator) - 0.5)
@@ -160,6 +202,17 @@ def cepstrum_response(causal, anticausal, fft):
         buffer[..., fft - anticausal.shape[-1]:] = anticausal.flip(-1)
     spectrum = torch.fft.rfft(buffer, dim=-1)
     return torch.polar(torch.exp(spectrum.real.clamp(-14, 6)), spectrum.imag)
+
+
+# What inference renders from noise instead of pulses: the harmonics of the pitch
+# above this number, in the frames the model calls unvoiced and in those it calls
+# voiced (see ``SourceFilter.forward``). The weights were trained with pulses
+# alone. At a 90 Hz pitch the pulses are 11 ms apart, and breath, frication and
+# silence rendered with them beat at the pitch; a listener heard that as roughness
+# at the edges of words and preferred this setting in every row of a blind page
+# (docs/word-edge-artifact.md, section 11). Spanish only: nobody has listened to
+# the English model with it, so English keeps pulses alone, as it shipped.
+NOISE_ABOVE = (2.0, 33.0) if LANGUAGE == "es" else None
 
 
 class SourceFilter(nn.Module):
@@ -204,7 +257,30 @@ class SourceFilter(nn.Module):
         # then the same whether it stands alone or is padded inside a batch.
         return filtered(F.pad(source, (0, fft // 2)), response, fft, hop, window)[:, :source.shape[-1]]
 
-    def forward(self, hidden, f0, lengths, noise=None, phase=None, variant=None, anticausal_scale=1.0):
+    def _noise_share(self, harmonics, f0, here, following):
+        """How the harmonic branch's excitation is split between pulses and noise,
+        per sub-frame and bin: the share of the power that is noise, and the band
+        the noise may fill. `harmonics` [B, T] counts the harmonics of the pitch
+        that stay pulses; the share rises from 0 to 1 over the octave centred on
+        the last of them, so 0 is all noise and infinity all pulses. The noise
+        stays where the pulse train has harmonics, from half the pitch up to the
+        band limit: the filter was never trained on anything else."""
+        c = self.config
+        hertz = torch.arange(c.synth_fft // 2 + 1, device=f0.device) * (c.sample_rate / c.synth_fft)
+        octaves = torch.log2(hertz.clamp_min(1e-3) / (harmonics.float() * f0).clamp_min(1e-6)[..., None]).clamp(-0.5, 0.5)
+        share = 0.5 * (1 + torch.sin(math.pi * octaves))
+        band = (hertz >= 0.5 * f0[..., None]) & (hertz <= c.harmonic_limit * c.sample_rate)
+        share, band = (0.5 * (self._take(value, here) + self._take(value, following)) for value in (share, band.float()))
+        return share, band
+
+    def forward(self, hidden, f0, lengths, noise=None, phase=None, variant=None, anticausal_scale=1.0, harmonic_phase=None,
+                noise_above=None, breath=None):
+        """``noise_above`` [B, T] is a harmonic number: above that harmonic of the
+        frame's pitch the harmonic branch is driven by noise (``breath``
+        [B, samples], drawn here if absent) in place of pulses,
+        with the same power in every band and through the same filter. None is
+        the pulse train alone, which is what the weights were trained with and
+        what training still uses; ``TinyVoca.synthesize`` passes ``NOISE_ABOVE``."""
         c = self.config
         frames = hidden.shape[1]
         samples = frames * c.hop
@@ -238,7 +314,10 @@ class SourceFilter(nn.Module):
             # Hold the last real pitch value through padding: the pitch glide inside an
             # utterance's final frame must not depend on what the batch was padded with.
             f0 = f0.float().gather(1, torch.minimum(torch.arange(frames, device=f0.device)[None], last))
-            pulses = pulse_train(f0, c.sample_rate, c.hop, c.harmonic_limit, phase) * audible
+            # Diagnosing the word-edge artifact: the pulse train puts every harmonic
+            # at phase zero. `harmonic_phase` disperses them without touching the
+            # magnitudes; None is the pulse train the weights were trained with.
+            pulses = pulse_train(f0, c.sample_rate, c.hop, c.harmonic_limit, phase, harmonic_phase) * audible
             if noise is None:
                 noise = torch.randn(hidden.shape[0], samples, device=hidden.device)
             # Diagnosing the word-edge artifact: render one branch at a time, so a
@@ -247,8 +326,23 @@ class SourceFilter(nn.Module):
                 noise = torch.zeros_like(noise)
             elif variant == "noise_only":
                 pulses = torch.zeros_like(pulses)
-            wave = (self._shape(pulses, harmonic_response, c.synth_fft, c.synth_hop, self.synth_window)
-                    + self._shape(noise * audible, noise_response, c.noise_fft, c.noise_hop, self.noise_window))
+            if noise_above is None:
+                harmonic = self._shape(pulses, harmonic_response, c.synth_fft, c.synth_hop, self.synth_window)
+            else:
+                # A 90 Hz pulse train can only put energy near its pulses, so whatever
+                # the model renders with it arrives in bursts, noise-like sounds
+                # included. Here those bands are excited by noise instead. A pulse
+                # train of unit power spreads it evenly up to the band limit; white
+                # noise of power 0.5 / limit has the same density.
+                share, band = self._noise_share(noise_above, f0, here, following)
+                if breath is None:
+                    breath = torch.randn(hidden.shape[0], samples, device=hidden.device)
+                if variant == "noise_only":
+                    breath = torch.zeros_like(breath)
+                harmonic = (self._shape(pulses, harmonic_response * torch.sqrt(1 - share), c.synth_fft, c.synth_hop, self.synth_window)
+                            + self._shape(breath * audible * math.sqrt(0.5 / c.harmonic_limit), harmonic_response * torch.sqrt(share) * band,
+                                          c.synth_fft, c.synth_hop, self.synth_window))
+            wave = harmonic + self._shape(noise * audible, noise_response, c.noise_fft, c.noise_hop, self.noise_window)
             return wave * audible
 
 
@@ -362,8 +456,14 @@ class TinyVoca(nn.Module):
 
     @torch.inference_mode()
     def synthesize(self, tokens, stress, lengths, speakers, speed=1.0, pitch_shift=0.0, seed=0, pitch_range=1.0, pitch_jitter=0.0,
-                   voiced_vowels=True, variant=None, anticausal_scale=1.0):
-        """Free-running synthesis: predicted durations, pitch, voicing and energy."""
+                   voiced_vowels=True, variant=None, anticausal_scale=1.0, harmonic_phase=None, noise_above=NOISE_ABOVE):
+        """Free-running synthesis: predicted durations, pitch, voicing and energy.
+        ``harmonic_phase`` (see ``harmonic_phases``) disperses the excitation.
+        ``noise_above`` is a pair of harmonic numbers, for the frames the model
+        calls unvoiced and for those it calls voiced: above that harmonic of the
+        pitch the harmonic branch is driven by noise instead of pulses (0 is all
+        noise, ``math.inf`` all pulses). None is pulses alone, which is how the
+        weights were trained and what shipped before ``NOISE_ABOVE``."""
         if not math.isfinite(speed) or not 0.25 <= speed <= 4 or not math.isfinite(pitch_shift) or not 0 <= pitch_range <= 3:
             raise ValueError("speed must be between 0.25 and 4, pitch_shift finite and pitch_range between 0 and 3")
         hidden, mask = self.encode(tokens, stress, lengths, speakers)
@@ -384,11 +484,20 @@ class TinyVoca(nn.Module):
         acoustic = self.decode(prosody_hidden, self.hard_prosody(prosody), frame_mask)
         # One noise stream per row, drawn at the row's own length, so batching or
         # padding never changes a row's audio.
-        noise = nn.utils.rnn.pad_sequence([torch.randn(int(n) * self.config.hop, generator=torch.Generator().manual_seed(seed + row))
-                                           for row, n in enumerate(frame_lengths)], batch_first=True)
+        streams = [torch.Generator().manual_seed(seed + row) for row in range(len(frame_lengths))]
+        noise = nn.utils.rnn.pad_sequence([torch.randn(int(n) * self.config.hop, generator=stream)
+                                           for stream, n in zip(streams, frame_lengths)], batch_first=True)
+        cutoff = breath = None
+        if noise_above is not None:
+            unvoiced, voiced = noise_above
+            cutoff = torch.where(prosody[..., 1] > 0, float(voiced), float(unvoiced))
+            # Drawn after each row's noise from the same stream, so the noise branch hears what it always did.
+            breath = nn.utils.rnn.pad_sequence([torch.randn(int(n) * self.config.hop, generator=stream)
+                                                for stream, n in zip(streams, frame_lengths)], batch_first=True).to(hidden.device)
         pitch = prosody[..., 0] + pitch_shift
         if pitch_jitter > 0:
             pitch = pitch + self.pitch_wobble(pitch.shape, pitch_jitter, seed, pitch.device)
         wave = self.vocoder(acoustic, self.frequency(pitch), frame_lengths, noise=noise.to(hidden.device),
-                            variant=variant, anticausal_scale=anticausal_scale)
+                            variant=variant, anticausal_scale=anticausal_scale, harmonic_phase=harmonic_phase,
+                            noise_above=cutoff, breath=breath)
         return wave, frame_lengths * self.config.hop, {"durations": durations, "prosody": prosody, "frame_mask": frame_mask}

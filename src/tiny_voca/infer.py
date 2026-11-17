@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import torch
 from .config import CHECKPOINT_FORMAT, Config
-from .model import TinyVoca, UtteranceTooLong
+from .model import NOISE_ABOVE, TinyVoca, UtteranceTooLong
 from .text import (FRONTEND_VARIABLE, FRONTENDS, NOT_AN_END, ONLY_LANGUAGE, SENTENCE_START, NothingToPronounce,
                    frontend_fingerprint, phonemize, set_frontend)
 
@@ -100,27 +100,29 @@ def limit_peak(wave, peak=PEAK):
     return wave * (peak / loudest) if loudest > peak else wave
 
 
-def _voice(model, phones, voice, speed, pitch_shift, seed, pitch_range):
+def _voice(model, phones, voice, speed, pitch_shift, seed, pitch_range, noise_above=NOISE_ABOVE):
     """Phonemes -> (float waveform tensor, details): one call of the model."""
     device = next(model.parameters()).device
     tokens = torch.tensor([phones.ids], device=device)
     stress = torch.tensor([phones.stress], device=device)
     speaker = torch.tensor([model.config.speakers.index(voice)], device=device)
-    audio, lengths, details = model.synthesize(tokens, stress, torch.tensor([len(phones)], device=device), speaker, speed, pitch_shift, seed, pitch_range)
+    audio, lengths, details = model.synthesize(tokens, stress, torch.tensor([len(phones)], device=device), speaker, speed, pitch_shift, seed, pitch_range,
+                                             noise_above=noise_above)
     if not torch.isfinite(audio).all():
         raise RuntimeError("model produced non-finite audio")
     return audio[0, :int(lengths[0])].cpu(), details
 
 
-def speak(model, text, voice, speed=1.0, pitch_shift=0.0, seed=0, pitch_range=1.0):
+def speak(model, text, voice, speed=1.0, pitch_shift=0.0, seed=0, pitch_range=1.0, noise_above=NOISE_ABOVE):
     """One utterance: text -> (float waveform tensor, phonemized text, details).
     Same front end as training. The audio is the model's output as it is and
     can peak above 1.0 (see ``limit_peak``). ``speak_text`` reads text of any
-    length."""
+    length. ``noise_above=None`` renders with pulses alone (see
+    ``TinyVoca.synthesize``), for comparisons with what shipped before."""
     phones = phonemize(text)
     if len(phones) > model.config.max_tokens:
         raise ValueError("text is too long for one utterance; speak_text splits it into sentences")
-    wave, details = _voice(model, phones, voice, speed, pitch_shift, seed, pitch_range)
+    wave, details = _voice(model, phones, voice, speed, pitch_shift, seed, pitch_range, noise_above)
     return wave, phones, details
 
 

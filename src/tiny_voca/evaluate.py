@@ -27,6 +27,7 @@ import torch
 from .config import Config
 from .data import AnnotatedDataset
 from .infer import load_model, speak
+from .model import NOISE_ABOVE
 from .losses import SpectralLoss
 from .languages import profile as language
 from .text import LANGUAGE, phonemize
@@ -90,6 +91,9 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--pitch-range", type=float, default=1.0, help="Inference pitch-range setting under test (1 = as predicted)")
+    parser.add_argument("--pulses-only", action="store_true",
+                        help="Render the harmonic branch from pulses alone, as the weights were trained and as shipped before model.NOISE_ABOVE")
+    parser.add_argument("--features", type=Path, help="Acoustic features, when they are not where the annotations recorded them")
     args = parser.parse_args()
     import soundfile as sf
     from .train import balanced_indices
@@ -99,7 +103,8 @@ def main():
     spectral = SpectralLoss(c.sample_rate)
     audio_dir = args.output / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
-    datasets = {split: AnnotatedDataset(args.annotations / (split + ".jsonl"), c, cache=False) for split in args.splits}
+    noise_above = None if args.pulses_only else NOISE_ABOVE
+    datasets = {split: AnnotatedDataset(args.annotations / (split + ".jsonl"), c, acoustic_root=args.features, cache=False) for split in args.splits}
     known_texts = set()
     for split in ("train", "validation", "test"):
         manifest = args.annotations / (split + ".jsonl")
@@ -121,7 +126,8 @@ def main():
 
     samples = []
     for job in jobs:
-        wave, phones, details = speak(model, job["text"], job["voice"], speed=args.speed, seed=args.seed, pitch_range=args.pitch_range)
+        wave, phones, details = speak(model, job["text"], job["voice"], speed=args.speed, seed=args.seed, pitch_range=args.pitch_range,
+                                      noise_above=noise_above)
         wave = wave.numpy()
         generated_path = audio_dir / f"{job['id']}-generated.wav"
         samples_out, attenuation = pcm16(wave)
@@ -198,7 +204,7 @@ def main():
     report = {"tag": args.tag, "checkpoint": str(args.checkpoint), "step": checkpoint_step,
               "inference_parameters": sum(p.numel() for p in model.parameters()), "asr_model": None if args.no_asr else "faster-whisper " + args.asr_model,
               "note": "generated audio is free-running: text in, predicted durations/pitch/voicing/energy",
-              "settings": {"speed": args.speed, "pitch_range": args.pitch_range, "seed": args.seed},
+              "settings": {"speed": args.speed, "pitch_range": args.pitch_range, "seed": args.seed, "noise_above": noise_above},
               "frontend_token_mismatches": mismatched, "summary": summary, "samples": samples}
     (args.output / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps({"summary": summary, "frontend_token_mismatches": len(mismatched)}, indent=1))

@@ -170,9 +170,19 @@ cd tiny-voca
 
 <script src="player.js"></script>
 <script>
-// The model is fetched from Hugging Face at a fixed revision; ?model=<base URL> loads another copy (a local one for tests).
-const MODEL = new URLSearchParams(location.search).get("model")
-  || "https://huggingface.co/marcosmaceo/tiny-voca-es/resolve/main/";
+// The model is fetched from Hugging Face at a fixed revision. ?model=<base URL> loads another copy for tests,
+// but only from this site or this machine: a link must not make the page speak with someone else's model.
+const DEFAULT_MODEL = "https://huggingface.co/marcosmaceo/tiny-voca-es/resolve/main/";
+const MODEL = (() => {
+  const asked = new URLSearchParams(location.search).get("model");
+  if (!asked) return DEFAULT_MODEL;
+  try {
+    const url = new URL(asked, location.href);
+    if (url.origin === location.origin || ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) return url.href;
+  } catch (error) {}
+  console.warn("Ignoring ?model=: only this site or localhost may serve another model");
+  return DEFAULT_MODEL;
+})();
 const EXAMPLES = [
   ["Saludo", "Hola, ¿cómo estás? Esto es tiny voca, una voz pequeña en español que funciona en tu navegador."],
   ["Números", "La reunión pasó a las 15:30 del 14 de marzo, así que quedan unos 45 minutos. Cuesta 12,99 euros."],

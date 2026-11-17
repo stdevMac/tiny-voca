@@ -172,7 +172,7 @@ cd tiny-voca
 <script>
 // The model is fetched from Hugging Face at a fixed revision. ?model=<base URL> loads another copy for tests,
 // but only from this site or this machine: a link must not make the page speak with someone else's model.
-const DEFAULT_MODEL = "https://huggingface.co/marcosmaceo/tiny-voca-es/resolve/main/";
+const DEFAULT_MODEL = "https://huggingface.co/marcosmaceo/tiny-voca-es/resolve/9898eaef9b245d7a5240156eed919ee1bd2a9b84/";
 const MODEL = (() => {
   const asked = new URLSearchParams(location.search).get("model");
   if (!asked) return DEFAULT_MODEL;

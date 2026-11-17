@@ -21,6 +21,8 @@ cd "$(dirname "$0")"
 VENV="app_es/.venv"
 PYTHON="$VENV/bin/python"
 REPO="marcosmaceo/tiny-voca-es"
+# The model revision this code was released with; a new model is a new revision.
+REVISION="9898eaef9b245d7a5240156eed919ee1bd2a9b84"
 MODEL="${TINY_VOCA_ES_MODEL:-weights/es/tiny-voca-es.onnx}"
 CONFIG="${TINY_VOCA_ES_CONFIG:-weights/es/tiny-voca-es.json}"
 
@@ -65,11 +67,11 @@ if [ ! -f "$MODEL" ] || [ ! -f "$CONFIG" ]; then
     exit 1
   fi
   echo "Downloading the model from https://huggingface.co/$REPO (about 21 MB)…"
-  "$PYTHON" - "$REPO" <<'PY'
+  "$PYTHON" - "$REPO" "$REVISION" <<'PY'
 import sys
 from huggingface_hub import snapshot_download
 
-snapshot_download(sys.argv[1], local_dir="weights/es", allow_patterns=["tiny-voca-es.onnx", "tiny-voca-es.json"])
+snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir="weights/es", allow_patterns=["tiny-voca-es.onnx", "tiny-voca-es.json"])
 PY
 fi
 

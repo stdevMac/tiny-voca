@@ -64,7 +64,9 @@ def main():
     parser.add_argument("--per-voice", type=int, default=12)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--pulses-only", action="store_true", help="pulses alone, as shipped before model.NOISE_ABOVE")
     args = parser.parse_args()
+    excitation = {"noise_above": None} if args.pulses_only else {}
 
     model = load_model(args.checkpoint, args.device)
     rate = model.config.sample_rate
@@ -82,8 +84,8 @@ def main():
         question = as_question(row["text"])
         for voice in model.config.speakers:
             with torch.no_grad():
-                flat, _, _ = speak(model, row["text"], voice, seed=args.seed)
-                risen, _, _ = speak(model, question, voice, seed=args.seed)
+                flat, _, _ = speak(model, row["text"], voice, seed=args.seed, **excitation)
+                risen, _, _ = speak(model, question, voice, seed=args.seed, **excitation)
             stem = f"s{number:02d}-{voice}"
             a = measure(flat.numpy(), rate, args.output / f"{stem}-statement.wav")
             b = measure(risen.numpy(), rate, args.output / f"{stem}-question.wav")

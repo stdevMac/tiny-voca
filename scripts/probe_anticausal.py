@@ -67,7 +67,8 @@ def main():
             for scale in SCALES:
                 with torch.inference_mode():
                     wave, lengths, _ = model.synthesize(tokens, stress, length, speaker, speed=1.0, seed=args.seed,
-                                                        pitch_range=args.pitch_range, anticausal_scale=scale)
+                                                        pitch_range=args.pitch_range, anticausal_scale=scale,
+                                                        noise_above=None)   # pulses alone, as when this was measured
                 rendered[scale] = wave[0, : int(lengths[0])].float().cpu().numpy()
             # Level-match every render to the baseline, so what is compared is the
             # timbre and not the 11 dB the anticausal half contributes.

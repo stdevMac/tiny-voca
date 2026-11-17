@@ -68,7 +68,8 @@ def main():
                 with torch.inference_mode():
                     wave, lengths, _ = model.synthesize(tokens, stress, length, speaker, speed=1.0, seed=args.seed,
                                                         pitch_range=args.pitch_range,
-                                                        variant=None if variant == "baseline" else variant)
+                                                        variant=None if variant == "baseline" else variant,
+                                                        noise_above=None)   # pulses alone, as when this was measured
                 audio = wave[0, : int(lengths[0])].float().cpu().numpy()
                 audio = audio / max(np.abs(audio).max(), 1e-6) * 0.95
                 file = f"{name}-{label}-{variant}.wav"

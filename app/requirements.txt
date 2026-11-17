@@ -1,0 +1,7 @@
+dizione @ git+https://github.com/n4ze3m/dizione@8cd889e4de7be6bd1dd2e6891344a0729fa14dd4
+numpy>=1.24,<3
+onnxruntime>=1.20
+soundfile>=0.12,<1
+fastapi>=0.115
+uvicorn[standard]>=0.30
+huggingface-hub>=0.34

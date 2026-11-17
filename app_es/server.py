@@ -6,7 +6,8 @@ are all in this file:
 
 * the phonemizer is the Spanish front end (eSpeak NG, 42 phones) rather than
   ``dizione``, so the tokens match the ones the model was trained on;
-* the weights come from the local artifacts directory, not Hugging Face.
+* the weights are ``weights/es/tiny-voca-es.onnx`` and ``.json``, which
+  ``run-es.sh`` downloads from https://huggingface.co/marcosmaceo/tiny-voca-es.
 
 The front end is imported from ``src/tiny_voca`` rather than reimplemented. A
 hand-written eSpeak wrapper would be a second implementation of the tokenizer,
@@ -17,9 +18,8 @@ one punctuation mark. The fingerprint check below makes that a startup error.
     .venv/bin/python -m uvicorn app_es.server:app --host 127.0.0.1 --port 8000
 
 Environment:
-    TINY_VOCA_ES_DIR     directory holding the run (default ~/tiny-voca-artifacts/es-1-anneal)
-    TINY_VOCA_ES_MODEL   explicit .onnx path
-    TINY_VOCA_ES_CONFIG  explicit .json path
+    TINY_VOCA_ES_MODEL   .onnx path (default weights/es/tiny-voca-es.onnx)
+    TINY_VOCA_ES_CONFIG  .json path (default weights/es/tiny-voca-es.json)
     TINY_VOCA_PORT       port to listen on (used by run-es.sh)
 """
 
@@ -52,17 +52,14 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from tiny_voca.infer import finished, sentences, shorter
-from tiny_voca.text import NothingToPronounce, frontend_fingerprint, phonemize
+from tiny_voca.text import NothingToPronounce, finished, frontend_fingerprint, phonemize, sentences, shorter
 
 APP_STATIC = ROOT / "app" / "static"
 ES_STATIC = Path(__file__).resolve().parent / "static"
 
-DEFAULT_DIR = Path.home() / "tiny-voca-artifacts" / "es-1-anneal"
-RUN_DIR = Path(os.environ.get("TINY_VOCA_ES_DIR", DEFAULT_DIR)).expanduser()
-EVAL_DIR = RUN_DIR / "eval" / "anneal-es-1-anneal"
-ONNX = Path(os.environ.get("TINY_VOCA_ES_MODEL", EVAL_DIR / "tiny-voca-es-anneal.onnx")).expanduser()
-CONFIG = Path(os.environ.get("TINY_VOCA_ES_CONFIG", EVAL_DIR / "tiny-voca-es-anneal.json")).expanduser()
+WEIGHTS = ROOT / "weights" / "es"
+ONNX = Path(os.environ.get("TINY_VOCA_ES_MODEL", WEIGHTS / "tiny-voca-es.onnx")).expanduser()
+CONFIG = Path(os.environ.get("TINY_VOCA_ES_CONFIG", WEIGHTS / "tiny-voca-es.json")).expanduser()
 
 MAX_TEXT = 5000
 SPANISH_ONLY = "tiny-voca solo lee español por ahora."
@@ -115,7 +112,7 @@ class ModelState:
         try:
             for path in (ONNX, CONFIG):
                 if not path.exists():
-                    raise FileNotFoundError(f"missing {path}")
+                    raise FileNotFoundError(f"missing {path}; run ./run-es.sh to download the weights")
             self.config = json.loads(CONFIG.read_text(encoding="utf-8"))
             self.sample_rate = int(self.config["sample_rate"])
             self.hop = int(self.config["hop"])

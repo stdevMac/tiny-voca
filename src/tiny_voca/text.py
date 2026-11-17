@@ -283,6 +283,62 @@ def phonemize(text):
     return tokenize(pieces)
 
 
+# Splitting text into what the model speaks at once. Kept here, free of torch,
+# so the local app can use it with ONNX Runtime alone.
+_SPACE = re.compile("[\\s" + chr(0xFEFF) + "]+")    # JavaScript's \s, which the demo uses, takes U+FEFF too
+_SENTENCE_END = re.compile(r"""(?:(?<=[.!?…])|(?<=[.!?…]["')\]]))\s+(?=["'(\[]?[""" + SENTENCE_START + r"""])""")
+_NOT_AN_END = re.compile(r"(?:\b(?:" + "|".join(re.escape(word) for word in NOT_AN_END) + r")|\b[^\W\d_])\.$",
+                         re.IGNORECASE)
+_CLAUSE_END = re.compile(r"(?<=[,;:—])\s+")
+_TEXT_END = re.compile("[\\s" + chr(0xFEFF) + "]+$")
+_CLOSING = "\"'”’)]»"                               # these may stand after the last mark: She said "go!"
+
+
+def sentences(text):
+    """The sentences of ``text``, without a break after a title or an initial
+    or inside a number. The browser demo splits the same way
+    (``web/public/worker.js``); keep the two alike."""
+    parts, current = [], ""
+    for piece in _SENTENCE_END.split(_SPACE.sub(" ", text).strip()):
+        current = f"{current} {piece}" if current else piece
+        if not _NOT_AN_END.search(current):
+            parts.append(current)
+            current = ""
+    if current:
+        parts.append(current)
+    return [part for part in parts if any(char.isalnum() for char in part)]
+
+
+def finished(text):
+    """``text`` with a full stop added when it ends without a mark. Before a
+    final mark the voice lengthens the last syllable and lets the sound fall;
+    without one the audio breaks off. A face or another sign after the last
+    word is no mark ("see you :)"), a comma or a colon is one. The browser
+    demo does the same (``web/public/worker.js``); keep the two alike."""
+    body = _TEXT_END.sub("", text)
+    if not body:
+        return text
+    last = _SPACE.split(body)[-1]
+    if any(char.isalnum() for char in last):
+        marked = last.rstrip(_CLOSING)[-1:] in tuple(".!?…,;:")
+    else:
+        marked = any(char in ".!?…" for char in last) or last in (",", ";", ":")
+    return text if marked else body + "."
+
+
+def shorter(text):
+    """``text`` in smaller pieces: cut after commas and the like if it has
+    any, else in two between words. ``[]`` for a single word."""
+    pieces = _CLAUSE_END.split(text)
+    if len(pieces) > 1:
+        return pieces
+    words = text.split(" ")
+    if len(words) < 2:
+        return []
+    half = (len(words) + 1) // 2
+    return [" ".join(words[:half]), " ".join(words[half:])]
+
+
 def is_phone(token_ids):
     """Boolean list/tensor helper: tokens that must be realised as audio."""
     return [int(i) in PHONE_IDS for i in token_ids]

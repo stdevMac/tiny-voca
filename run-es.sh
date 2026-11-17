@@ -55,7 +55,7 @@ if [ ! -x "$PYTHON" ]; then
   install_packages
 fi
 
-if ! "$PYTHON" -c "import fastapi, uvicorn, onnxruntime, soundfile, huggingface_hub" >/dev/null 2>&1; then
+if ! "$PYTHON" -c "import fastapi, uvicorn, onnx, onnxruntime, soundfile, huggingface_hub" >/dev/null 2>&1; then
   install_packages
 fi
 

@@ -186,11 +186,15 @@ has never seen.
   The repository's code compares it with the checkpoint and refuses to run on a
   mismatch.
 - Check your install with `espeak-ng --version`; it must say 1.52.0.
-- eSpeak NG is licensed GPL-3.0. This repository does not contain or link to
-  it: the code runs it as a separate program and reads its output. No eSpeak NG
-  code or data is part of the weights. If you ship the weights together with
-  eSpeak NG you are shipping a GPL-3.0 program, with the obligations that
-  come with it.
+- eSpeak NG is licensed GPL-3.0. This model repository does not contain or
+  link to it: the Python code runs it as a separate program and reads its
+  output, and no eSpeak NG code or data is part of the weights. The
+  [browser demo](https://stdevmac.github.io/tiny-voca/) does ship eSpeak NG
+  1.52.0 compiled to WebAssembly, under GPL-3.0, with its licence and the
+  script that builds it from the upstream `1.52.0` tag
+  (`scripts/build_espeak_wasm.sh` in the GitHub repository). If you ship the
+  weights together with eSpeak NG you are shipping a GPL-3.0 program, with
+  the obligations that come with it.
 - Numbers, dates and money are read by eSpeak NG from context ("4.090 euros"
   becomes "cuatro mil noventa euros"). Slashes in dates are read literally, so
   write dates out.
@@ -330,8 +334,9 @@ No formal listening test has been run.
 ## License
 
 The weights and code are released under Apache-2.0. eSpeak NG (GPL-3.0) is
-required at inference but is not distributed here and is used as a separate
-program. The training data's text is CC0 or written for this project; see the
+required at inference. It is not distributed in this repository, where it is
+used as a separate program; the browser demo distributes a WebAssembly build of
+it under GPL-3.0. The training data's text is CC0 or written for this project; see the
 dataset card for the dataset's license. Qwen3-TTS (Apache-2.0) generated the
 training audio, `facebook/wav2vec2-lv-60-espeak-cv-ft` (Apache-2.0) labelled it
 and Whisper (MIT) screened and scored it; none of them is part of the model.

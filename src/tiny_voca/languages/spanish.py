@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 CODE = "es"
 NAME = "Spanish"
-FRONTEND_VERSION = 1              # first Spanish front end; no released model yet
+FRONTEND_VERSION = 1              # first Spanish front end; tiny-voca-es (step 142,000) was trained with it
 FRONTENDS = ("espeak",)          # no permissive Spanish G2P yet; see docs/spanish.md
 DECIMAL_COMMA = True             # "3,14" is a number; a full stop groups thousands
 ONLY_LANGUAGE = "tiny-voca solo lee español por ahora"

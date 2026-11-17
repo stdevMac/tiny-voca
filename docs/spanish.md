@@ -15,7 +15,8 @@ vocoder, the duration/prosody predictors, the GAN schedule — is reused as is.
 | `tiny_voca/languages/` | **yes** | one profile per language |
 | `tiny_voca/config.py` | partly | `vocab_size` follows the active inventory |
 | `tiny_voca/align.py` | no | the aligner already covers Spanish |
-| `web/` | **yes** | still the English demo; see *Not done yet* |
+| `web/` | **yes** | upstream's English browser demo, unchanged |
+| `site/` | **yes** | the Spanish browser demo: eSpeak NG 1.52.0 as WebAssembly, ONNX Runtime Web |
 
 Select the language once per process:
 
@@ -110,6 +111,38 @@ does not use it; it exists so word-error-rate scoring can compare "4090" with
 "cuatro mil noventa", and so the corpus builder can keep digits out of the
 training text.
 
+## Excitation at inference
+
+The Spanish model speaks with a mixed excitation; the English one does not.
+The synthesis head has a harmonic branch, driven by a pulse train at the
+predicted pitch, and a noise branch. The model barely uses the noise branch,
+so breath, frication and the floor of a pause come out of the pulse train as
+one burst per pitch period. At M2's 90 Hz those bursts are 11 ms apart, and a
+listener heard them as roughness at the edges of words.
+
+At inference, the harmonic branch's filter is therefore driven by white noise
+of the same power instead of pulses above a harmonic of the frame's pitch:
+above harmonic 2 in frames the model calls unvoiced, above harmonic 33 in
+voiced ones, crossfaded over one octave. This is `model.NOISE_ABOVE = (2.0,
+33.0)`, and it is the default of `TinyVoca.synthesize`, `infer.speak` and
+`speak_text`, `tiny_voca.evaluate` and the ONNX export. Thirty-three
+harmonics is 3 kHz for M2 and 8.3 kHz for F2, so F2's voiced frames are almost
+untouched.
+
+- Training is unchanged (`SourceFilter.forward` defaults to pulses alone) and
+  the weights are the ones trained with pulses; nothing was retrained.
+- In a blind comparison against pulses alone, the listener preferred it on M2
+  and found nothing worse on either voice. Word error rate, durations and pitch
+  did not change; synthesis takes about a tenth longer.
+- `--pulses-only` in `tiny_voca.evaluate` and `tiny_voca.export`, or
+  `noise_above=None` in Python, gives the pulse train alone, bit for bit the
+  earlier release.
+- English keeps pulses alone (`NOISE_ABOVE` is None when
+  `TINY_VOCA_LANGUAGE=en`): nobody has listened to the English model with it.
+
+The measurements, the listening pages and what is still open are in
+[word-edge-artifact.md](word-edge-artifact.md), section 11.
+
 ## Voices
 
 Two voices, F2 and M2, designed once with Qwen3-TTS VoiceDesign from Spanish
@@ -119,22 +152,29 @@ front end produces `θ` and the teacher must pronounce it.
 
 ## Licensing
 
-eSpeak NG is GPL-3.0. The English project avoided it for the shipped model by
+eSpeak NG is GPL-3.0. The English project avoided it for its released model by
 writing `dizione`, a permissive CMUdict-based front end. There is no equivalent
-Spanish G2P in this fork yet, so **a Spanish model trained with this front end
-inherits the eSpeak question** if you plan to ship it.
+Spanish G2P in this fork, so the Spanish model is trained on, and speaks with,
+eSpeak's phonemes.
 
-The model weights are a separate artefact from the phonemizer, and the original
-project shipped weights trained on eSpeak phonemes under Apache-2.0, but the
-safe path before publishing is to add a permissive Spanish front end behind the
+How the release handles it: the code and the weights are Apache-2.0, and
+eSpeak NG is not part of either. The Python code runs the `espeak-ng` program as
+a separate process, which the user installs. The browser demo loads a
+WebAssembly build of eSpeak NG 1.52.0, built from its source by
+`scripts/build_espeak_wasm.sh` and served with eSpeak NG's own license. The
+original project also shipped weights trained on eSpeak phonemes under
+Apache-2.0.
+
+The way to remove eSpeak entirely is a permissive Spanish front end behind the
 same `FRONTENDS` switch (`text.py` already supports two). Candidates: `gruut`
 (MIT, has Spanish), or a rule-based Spanish G2P written for the project. The
 inventory is fixed, so swapping the front end only changes the fingerprint, not
-the model.
+the model; whether the model then needs retraining depends on how closely the
+new front end matches eSpeak's output.
 
 ## Not done yet
 
-* The browser demo (`web/`) is still the English one: it bundles dizione and
-  English text rules. Porting it means shipping a Spanish G2P to the browser.
+* `web/` is still upstream's English demo. The Spanish demo is a separate site
+  in `site/`, which ships eSpeak NG as WebAssembly instead of a new G2P.
 * `scripts/compare_espeak.py` compares eSpeak with dizione and is English-only.
 * No Spanish `own` front end, so `TINY_VOCA_FRONTEND=own` raises for `es`.

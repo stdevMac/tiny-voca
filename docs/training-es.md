@@ -5,6 +5,17 @@ which 7.7 hours trained the released checkpoint. The Spanish run has the same
 shape, so the budget is the same order of magnitude. The numbers below are
 estimates from the local pilot, not measurements on the target card.
 
+> **How the first run went.** This runbook was written before the run, and its
+> estimates are kept as they were. The run itself used one RTX 4090. It read
+> 11,050 sentences with both voices; 20,790 clips (24.5 h) passed screening and
+> 19,238 utterances (22.7 h) went into the training split. Training ran 122,000
+> steps, then a 20,000-step anneal at a low learning rate
+> (`scripts/anneal_es.sh`); the released model is step 142,000. What it
+> measured is in [round2.md](round2.md). The data is published as
+> [marcosmaceo/tiny-voca-es](https://huggingface.co/datasets/marcosmaceo/tiny-voca-es)
+> and the model as
+> [marcosmaceo/tiny-voca-es](https://huggingface.co/marcosmaceo/tiny-voca-es).
+
 ## What is already proven
 
 Run on this laptop (M3, 16 GB, no GPU), with macOS `say` standing in for the
@@ -47,7 +58,7 @@ $2 and tells you whether the voice and the alignment are right.
 ## Phase 0 — laptop
 
 ```bash
-make venv test          # 89 tests, both languages
+make venv test          # 96 tests (6 skipped); TINY_VOCA_LANGUAGE=en make test runs the English side
 make pilot              # ~1 h on an M3, no GPU
 ```
 
@@ -87,7 +98,7 @@ then:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y python3.12-venv espeak-ng ffmpeg git build-essential
-git clone <your-fork> tiny-voca-es && cd tiny-voca-es
+git clone https://github.com/stdevMac/tiny-voca.git tiny-voca-es && cd tiny-voca-es
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e ".[prepare,annotate,evaluate,export]"
 uv pip install --python .venv/bin/python -U qwen-tts faster-whisper
@@ -191,13 +202,17 @@ make evaluate           # data/eval/es-1/report.json + audio pairs
 make export             # data/runs/es-1/tiny-voca-es.onnx
 ```
 
-`evaluate` reports WER of synthesized speech transcribed by Whisper, plus
+`evaluate` reports WER of synthesized speech transcribed by Whisper (the
+`small` model by default; the published figures used
+`--asr-model large-v3-turbo`, as `scripts/post_training_es.sh` does), plus
 duration ratio, pause ratio and DTW mel distance against the recordings. It
 also checks that re-running the front end on the raw text reproduces the
 annotated tokens — a mismatch there means the front end changed under the
 checkpoint.
 
 The English model reached 0.6–0.9% WER on held-out and 0.0% on new sentences.
+The Spanish release reached 2.00% (validation), 1.08% (test) and 0.0% (new
+sentences) with large-v3-turbo; see [round2.md](round2.md).
 Those sets are tiny; treat the number as a smoke alarm, not a benchmark. Listen
 to `data/eval/es-1/audio/` before believing any of it.
 
@@ -207,6 +222,9 @@ to `data/eval/es-1/audio/` before believing any of it.
 scp <host>:tiny-voca-es/data/runs/es-1/inference.pt weights/tiny-voca-es.pt
 make speak CKPT=weights/tiny-voca-es.pt TEXT="Hola, ¿cómo estás?" OUT=hola.wav
 ```
+
+To use the released model instead of your own, download it with
+`hf download marcosmaceo/tiny-voca-es --local-dir weights/es`.
 
 `inference.pt` is ~18 MB and runs on CPU at roughly 70× real time on four
 threads, as the English one does. The ONNX file is for the browser path.

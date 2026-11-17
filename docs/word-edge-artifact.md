@@ -17,7 +17,9 @@ worse and the preference held, more weakly. It is the default of
 battery passes with it: word error rate, durations and pitch are unchanged,
 and it runs about a tenth slower.
 The weights are the shipped ones (es-1-anneal, step 142,000); nothing was
-retrained, nothing is committed, and the app still points at the old file.
+retrained. The change is committed on branch `release/es-1`, the local app now
+uses the new export by default, and the public release (model and dataset on
+Hugging Face, browser demo) is in preparation.
 "Better" is not "as clean as the teacher": what is still open is at the end
 of §11.
 
@@ -666,10 +668,14 @@ skipped). The new export has the inputs and outputs of the old one, and
   same machine.
 - *The English model* (§9) has the artifact and the same head. The switch has
   not been tried there.
-- *Release mechanics.* Nothing here is committed. `run-es.sh` and
-  `app_es/server.py` still default to `tiny-voca-es-anneal.onnx`; the new
-  export is `noise-default/onnx/tiny-voca-es-noise.onnx` with its `.json`, and
-  the shipped file was not overwritten.
+- *Release mechanics.* The change is committed on branch `release/es-1`, and
+  `run-es.sh` and `app_es/server.py` now default to the new export: the
+  release's `tiny-voca-es.onnx` and `.json`, the same files as
+  `noise-default/onnx/tiny-voca-es-noise.*`, downloaded from
+  [marcosmaceo/tiny-voca-es](https://huggingface.co/marcosmaceo/tiny-voca-es)
+  into `weights/es/` when there are no local files. The release is in
+  preparation; the pulses-only file, `tiny-voca-es-anneal.onnx`, was not
+  overwritten and `--pulses-only` reproduces it.
 
 ## 12. Reproducing
 

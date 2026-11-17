@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tiny-voca"
 version = "0.2.0"
-description = "A 4.5M-parameter two-voice English text-to-speech model trained from scratch"
+description = "A 4.5M-parameter two-voice text-to-speech model trained from scratch, in Spanish and English"
 readme = "README.md"
 authors = [{ name = "Muhammed Nazeem" }]
 license = { text = "Apache-2.0" }

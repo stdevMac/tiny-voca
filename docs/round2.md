@@ -148,6 +148,14 @@ which is the point, since capacity is not what is limiting the tone.
 
 ## The "echo" at word edges is in the teacher, not the model
 
+> **Superseded.** This section's conclusion, that the echo cannot be fixed at
+> inference, was later found to be wrong for the male voice. A large part of
+> what the listener heard was the pulse train itself, and replacing its high
+> harmonics with noise at inference reduced it. The released model speaks that
+> way by default. See [word-edge-artifact.md](word-edge-artifact.md), section
+> 11, and [spanish.md](spanish.md#excitation-at-inference). The measurements
+> below are kept as they were.
+
 A listener described an echo-like timbre at the start and end of each word. The
 mechanism is real and it is in the synthesis head: `SourceFilter` is not a
 neural vocoder but a harmonic-plus-noise DSP head, and its envelope is applied
@@ -323,6 +331,13 @@ every checkpoint, and the 120,000-step model with its full evidence.
 | `logs/` | pipeline, train, post-training, anneal | the run as it happened |
 
 **`es-1-anneal/` (446 MB) is the shipped model**, step 142,000.
+
+The public copies are on Hugging Face:
+[marcosmaceo/tiny-voca-es](https://huggingface.co/marcosmaceo/tiny-voca-es)
+holds `inference.pt` as `tiny-voca-es.pt`, and a later ONNX export with the
+mixed excitation (`tiny-voca-es.onnx` and `.json`, from
+`noise-default/onnx/`). The corpus, teacher audio and annotations are
+[the dataset](https://huggingface.co/datasets/marcosmaceo/tiny-voca-es).
 
 | path | what it is | why keep it |
 |---|---|---|

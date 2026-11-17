@@ -1,4 +1,12 @@
-# Model and data
+# The English model: architecture and data
+
+This file describes upstream's English tiny-voca: its architecture, data,
+training and evaluation, as released at
+[n4ze3m/tiny-voca](https://huggingface.co/n4ze3m/tiny-voca). The Spanish model
+in this fork has the same architecture with a different phoneme inventory,
+different data and its own evaluation:
+see [spanish.md](spanish.md), [training-es.md](training-es.md) and
+[round2.md](round2.md).
 
 ## Model
 
@@ -29,10 +37,10 @@ The waveform is produced by a source-filter synthesizer instead of a neural
 vocoder. A band-limited pulse train at the predicted pitch and a noise signal
 are each shaped by a time-varying filter, whose cepstrum the network predicts
 once per frame (hop 256 samples, 10.7 ms). This part has 25,862 parameters.
-When speaking (not when training), the pulse train's filter is driven by noise
-of the same power above harmonic 33 of the pitch in voiced frames and above
-harmonic 2 in unvoiced ones (`model.NOISE_ABOVE`; the reason is in
-`docs/word-edge-artifact.md`, section 11).
+The English model speaks with the pulse train alone, as it was released
+(`model.NOISE_ABOVE` is None for English). The Spanish model replaces part of
+the pulse train with noise at inference; see
+[spanish.md](spanish.md#excitation-at-inference).
 
 | Component | Parameters |
 |---|---:|
@@ -43,6 +51,8 @@ harmonic 2 in unvoiced ones (`model.NOISE_ABOVE`; the reason is in
 | Frame transformer B | 1,985,984 |
 | Source-filter waveform head | 25,862 |
 | Total at inference | 4,537,291 |
+
+The Spanish model has 4,534,411: its phoneme embedding is smaller (61 symbols).
 
 Two modules exist only during training: an auxiliary mel head (15,440
 parameters) and the waveform discriminators (2,675,312).

@@ -29,6 +29,10 @@ The waveform is produced by a source-filter synthesizer instead of a neural
 vocoder. A band-limited pulse train at the predicted pitch and a noise signal
 are each shaped by a time-varying filter, whose cepstrum the network predicts
 once per frame (hop 256 samples, 10.7 ms). This part has 25,862 parameters.
+When speaking (not when training), the pulse train's filter is driven by noise
+of the same power above harmonic 33 of the pitch in voiced frames and above
+harmonic 2 in unvoiced ones (`model.NOISE_ABOVE`; the reason is in
+`docs/word-edge-artifact.md`, section 11).
 
 | Component | Parameters |
 |---|---:|

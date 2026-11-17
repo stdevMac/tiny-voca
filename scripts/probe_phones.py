@@ -25,7 +25,6 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
-import torch
 
 from tiny_voca.align import AlignmentSettings, PhoneRecognizer, align_utterance
 from tiny_voca.config import Config

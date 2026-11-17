@@ -1,7 +1,6 @@
 import argparse
 import os
 from pathlib import Path
-import re
 import torch
 from .config import CHECKPOINT_FORMAT, Config
 from .model import NOISE_ABOVE, TinyVoca, UtteranceTooLong

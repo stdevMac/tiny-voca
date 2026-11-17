@@ -10,7 +10,6 @@ timing probe says so here, before 19 hours of audio are generated.
 import argparse
 import json
 from pathlib import Path
-import sys
 
 # Against the English corpus: 99.7% accepted, 81-86% vowel->voiceless and
 # 86-89% fricative->vowel within two frames, 0.2% one-frame phones.

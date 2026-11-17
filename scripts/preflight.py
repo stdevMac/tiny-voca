@@ -14,7 +14,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -154,7 +153,6 @@ def configuration():
 
 def onnx_roundtrip():
     import tempfile
-    import torch
     from tiny_voca.config import Config
     from tiny_voca.export import export
     from tiny_voca.model import TinyVoca

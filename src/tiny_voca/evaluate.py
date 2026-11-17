@@ -24,13 +24,12 @@ import re
 import numpy as np
 import torch
 
-from .config import Config
 from .data import AnnotatedDataset
 from .infer import load_model, speak
 from .model import NOISE_ABOVE
 from .losses import SpectralLoss
 from .languages import profile as language
-from .text import LANGUAGE, phonemize
+from .text import LANGUAGE
 
 NOVEL_SENTENCES = language.NOVEL_SENTENCES
 SEMITONES = 12 / np.log(2)

@@ -33,7 +33,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tiny_voca.infer import load_model
-from tiny_voca.model import SourceFilter, cepstrum_response, filtered, pulse_train
+from tiny_voca.model import cepstrum_response, filtered, pulse_train
 from tiny_voca.text import phonemize
 
 TEXT = "Por eso las empresas debían adoptar este nuevo sistema."

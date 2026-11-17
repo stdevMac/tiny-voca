@@ -30,7 +30,7 @@ from .align import ALIGNER_MODEL, AlignmentSettings, PhoneRecognizer, align_utte
 from .config import ANNOTATION_VERSION, Config
 from .journal import append, atomic_json, file_hash, recover
 from .text import (FRICATIVES, PHONE_SET, SYMBOL_TO_ID, UNK, VOICELESS, VOWEL_SET, Phonemized, frontend_fingerprint,
-                   frontend_identity, frontend_runtime, phonemize)
+                   frontend_runtime, phonemize)
 
 SPLITS = ("train", "validation", "test")
 

@@ -285,7 +285,7 @@ def phonemize(text):
 
 # Splitting text into what the model speaks at once. Kept here, free of torch,
 # so the local app can use it with ONNX Runtime alone.
-_SPACE = re.compile("[\\s" + chr(0xFEFF) + "]+")    # JavaScript's \s, which the demo uses, takes U+FEFF too
+_SPACE = re.compile("[\\s" + chr(0xFEFF) + "]+")    # JavaScript's \s, which the demos use, takes U+FEFF too
 _SENTENCE_END = re.compile(r"""(?:(?<=[.!?…])|(?<=[.!?…]["')\]]))\s+(?=["'(\[]?[""" + SENTENCE_START + r"""])""")
 _NOT_AN_END = re.compile(r"(?:\b(?:" + "|".join(re.escape(word) for word in NOT_AN_END) + r")|\b[^\W\d_])\.$",
                          re.IGNORECASE)
@@ -296,8 +296,9 @@ _CLOSING = "\"'”’)]»"                               # these may stand after
 
 def sentences(text):
     """The sentences of ``text``, without a break after a title or an initial
-    or inside a number. The browser demo splits the same way
-    (``web/public/worker.js``); keep the two alike."""
+    or inside a number. The browser demos split the same way
+    (``site/sentences.js``, tested by ``site/test/sentences_golden.mjs``, and
+    ``web/public/worker.js`` for English); keep them alike."""
     parts, current = [], ""
     for piece in _SENTENCE_END.split(_SPACE.sub(" ", text).strip()):
         current = f"{current} {piece}" if current else piece
@@ -314,7 +315,8 @@ def finished(text):
     final mark the voice lengthens the last syllable and lets the sound fall;
     without one the audio breaks off. A face or another sign after the last
     word is no mark ("see you :)"), a comma or a colon is one. The browser
-    demo does the same (``web/public/worker.js``); keep the two alike."""
+    demos do the same (``site/sentences.js``, ``web/public/worker.js``); keep
+    them alike."""
     body = _TEXT_END.sub("", text)
     if not body:
         return text
